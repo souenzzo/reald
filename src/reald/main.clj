@@ -3,15 +3,48 @@
             [hiccup2.core :as h]
             [ring.util.mime-type :as mime]
             [clojure.java.io :as io]
+            [reald.process :as process]
             [taoensso.timbre :as log]
             [cognitect.transit :as transit]
             [com.wsscode.pathom.core :as p]
             [com.wsscode.pathom.connect :as pc]
-            [clojure.edn :as edn])
+            [clojure.edn :as edn]
+            [clojure.java.shell :as sh]
+            [datascript.core :as ds]
+            [clojure.string :as string])
   (:import (java.io PushbackReader)))
 
+(defn generate-classpath!
+  [{:reald.project/keys [dir aliases]}]
+  (let [cmd (filter string? ["clojure"
+                             (when-not (empty? aliases)
+                               (str "-A" (string/join aliases)))
+                             "-Spath"])]
+    (binding [sh/*sh-dir* dir]
+      (-> (apply sh/sh cmd)
+          :out
+          string/split-lines
+          first))))
+
 (def register
-  [(pc/resolver `projects
+  [(pc/mutation `reald.project/create-repl
+                {}
+                (fn [{:keys [parser conn]
+                      :as   env} {:reald.project/keys [dir aliases]}]
+                  (let [cp (generate-classpath! {:reald.project/dir     dir
+                                                 :reald.project/aliases aliases})
+                        command ["java" "-cp" cp "clojure.main"]
+                        on-stdout (fn [text]
+                                    (prn [:text text]))
+                        on-stdin (fn []
+                                   nil)
+                        p (process/execute {::process/command   command
+                                            ::process/directory (io/file dir)
+                                            ::process/on-stdout on-stdout
+                                            ::process/on-stdin  on-stdin})]
+                    (ds/transact! conn )
+                    {:reald.project/dir dir})))
+   (pc/resolver `projects
                 {::pc/output [:reald.root/projects]}
                 (fn [{::keys [project-roots]} _]
                   (let [projects (for [root project-roots
@@ -59,6 +92,7 @@
 
 (def parser
   (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})]
+             ::p/mutate  pc/mutate
              ::p/env     {::project-roots          [(str (System/getProperty "user.home") "/src")]
                           ::p/reader               [p/map-reader
                                                     pc/reader3

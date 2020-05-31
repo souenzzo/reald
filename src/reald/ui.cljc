@@ -73,12 +73,20 @@
                                       (m/set-value! this :ui/selected-aliases (conj selected-aliases alias)))})))))
       (dom/div
         (dom/button
+          {:onClick #(comp/transact! this `[(reald.project/create-repl ~{:reald.project/dir dir
+                                                                         :reald.project/aliases aliases})])}
           (str "Create a REPL" (when-not (empty? selected-aliases)
                                  (str " with aliases: " (string/join ", " selected-aliases))))))
       (dom/div
-        {:onClick #(comp/transact! this `[(reald.project/create-repl ~{:reald.project/dir     dir
-                                                                       :reald.project/aliases aliases})])}
         (map li-run-config run-configs)))))
+
+(m/defmutation reald.project/create-repl
+  [{:reald.project/keys [dir aliases]}]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (m/returning env Project)))
 
 (dr/defrouter TopRouter [this {:keys [current-state]}]
   {:router-targets [Index Project]}
