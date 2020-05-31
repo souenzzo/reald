@@ -1,0 +1,9 @@
+{:deps   {:aliases [:cljs :test]}
+ :builds {:reald {:target           :browser
+                  :output-dir       "target/public"
+                  :asset-path       "/"
+                  :modules          {:ui {:entries [reald.ui]}}
+                  :compiler-options {:source-map true}
+                  :devtools         {:preloads   [devtools.preload
+                                                  com.fulcrologic.fulcro.inspect.preload]
+                                     :after-load reald.user/after-load}}}}
