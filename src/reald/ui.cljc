@@ -40,10 +40,18 @@
 
 (def li-run-config (comp/factory LiRunConfig {:keyfn :reald.run-config/ident}))
 
+(defsc LiProcess [this {:reald.process/keys [pid]}]
+  {:query [:reald.process/pid]}
+  (dom/li
+    (pr-str [pid])))
+
+(def ui-li-process (comp/factory LiProcess {:keyfn :reald.process/pid}))
+
 (defsc Project [this {:ui/keys            [selected-aliases]
-                      :reald.project/keys [name dir run-configs aliases]}]
+                      :reald.project/keys [name dir run-configs aliases active-processes]}]
   {:query         [:reald.project/name
                    {:reald.project/run-configs (comp/get-query LiRunConfig)}
+                   {:reald.project/active-processes (comp/get-query LiProcess)}
                    :reald.project/aliases
                    :ui/selected-aliases
                    :reald.project/dir]
@@ -72,8 +80,10 @@
                           :onChange (fn [_]
                                       (m/set-value! this :ui/selected-aliases (conj selected-aliases alias)))})))))
       (dom/div
+        (map ui-li-process active-processes))
+      (dom/div
         (dom/button
-          {:onClick #(comp/transact! this `[(reald.project/create-repl ~{:reald.project/dir dir
+          {:onClick #(comp/transact! this `[(reald.project/create-repl ~{:reald.project/dir     dir
                                                                          :reald.project/aliases aliases})])}
           (str "Create a REPL" (when-not (empty? selected-aliases)
                                  (str " with aliases: " (string/join ", " selected-aliases))))))

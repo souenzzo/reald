@@ -11,8 +11,10 @@
             [clojure.edn :as edn]
             [clojure.java.shell :as sh]
             [datascript.core :as ds]
-            [clojure.string :as string])
-  (:import (java.io PushbackReader)))
+            [clojure.string :as string]
+            [datascript.core :as d])
+  (:import (java.io PushbackReader)
+           (java.util Date)))
 
 (defn generate-classpath!
   [{:reald.project/keys [dir aliases]}]
@@ -34,15 +36,39 @@
                   (let [cp (generate-classpath! {:reald.project/dir     dir
                                                  :reald.project/aliases aliases})
                         command ["java" "-cp" cp "clojure.main"]
+                        ref-pid (promise)
                         on-stdout (fn [text]
-                                    (prn [:text text]))
+                                    (ds/transact! conn
+                                                  [{:reald.text-fragment/text    text
+                                                    :reald.text-fragment/inst    (new Date)
+                                                    :reald.text-fragment/process [::process/pid @ref-pid]}]))
                         on-stdin (fn []
-                                   nil)
-                        p (process/execute {::process/command   command
-                                            ::process/directory (io/file dir)
-                                            ::process/on-stdout on-stdout
-                                            ::process/on-stdin  on-stdin})]
-                    (ds/transact! conn )
+                                   (let [{:keys [reald.input-text/text db/id]} (->> (ds/q '[:find [(pull ?e [:db/id
+                                                                                                             :reald.input-text/text
+                                                                                                             :reald.input-text/inst])
+                                                                                                   ...]
+                                                                                            :in $ ?pid
+                                                                                            :where
+
+                                                                                            [?process ::process/pid ?pid]
+                                                                                            [?e :reald.input-text/pending-input ?input]
+                                                                                            [?e :reald.input-text/process ?process]]
+                                                                                          (ds/db conn) @ref-pid)
+                                                                                    (sort-by :reald.input-text/inst)
+                                                                                    first)]
+                                     (prn :found text)
+                                     (when id
+                                       (d/transact! conn [[:db.fn/retractEntity id]])
+                                       text)))
+                        process (process/execute {::process/command   command
+                                                  ::process/directory (io/file dir)
+                                                  ::process/on-stdout on-stdout
+                                                  ::process/on-stdin  on-stdin})
+                        pid (process/pid process)]
+                    (ds/transact! conn [{::process/pid      pid
+                                         ::process/instance process
+                                         ::process/dir      dir}])
+                    (deliver ref-pid pid)
                     {:reald.project/dir dir})))
    (pc/resolver `projects
                 {::pc/output [:reald.root/projects]}
@@ -52,6 +78,12 @@
                                        :when (.isDirectory file)]
                                    {:reald.project/dir-file file})]
                     {:reald.root/projects projects})))
+   (pc/resolver `active-processes
+                {::pc/input  #{:reald.project/dir}
+                 ::pc/output [:reald.project/active-processes]}
+                (fn [{:keys [conn]} {:reald.project/keys [dir]}]
+                  (let []
+                    {:reald.project/active-processes []})))
    (pc/resolver `dir-file->dir
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/dir]}
@@ -90,6 +122,12 @@
                 (fn [_ {:reald.project/keys [dir-file]}]
                   {:reald.project/name (.getName dir-file)}))])
 
+
+(def schema {::process/pid             {:db/unique :db.unique/identity}
+             :reald.input-text/process {:db/unique :db.unique/identity}})
+(defonce entity-conn (ds/create-conn schema))
+
+
 (def parser
   (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})]
              ::p/mutate  pc/mutate
@@ -98,6 +136,7 @@
                                                     pc/reader3
                                                     pc/open-ident-reader
                                                     p/env-placeholder-reader]
+                          :conn                    entity-conn
                           ::p/placeholder-prefixes #{">"}}}))
 
 (defn service
@@ -150,5 +189,6 @@
                       ::http/file-path "target/public"
                       ::http/port 1111)
                http/default-interceptors
+               http/dev-interceptors
                http/create-server
                http/start))))

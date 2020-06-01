@@ -35,7 +35,7 @@
         (async/thread
           (loop []
             (if-let [input (on-stdin)]
-              (let [bs (.getBytes (str input "\n"))]
+              (let [bs (.getBytes (str input))]
                 (.write stdin bs)
                 (.flush stdin))
               (async/<!! (async/timeout timeout)))
