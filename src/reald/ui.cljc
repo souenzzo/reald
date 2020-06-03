@@ -10,6 +10,23 @@
             [com.fulcrologic.fulcro.mutations :as m]
             [clojure.string :as string]))
 
+
+(defsc LiProcess [this {:reald.process/keys [pid alive?]
+                        :reald.project/keys [dir]}]
+  {:query [:reald.process/pid
+           :reald.process/alive?
+           :reald.project/dir]}
+  (dom/li
+    (dom/button
+      {:disabled (not alive?)
+       :onClick  #(dr/change-route this ["process" pid])}
+      (str dir "@" pid))))
+
+
+
+(def ui-li-process (comp/factory LiProcess {:keyfn :reald.process/pid}))
+
+
 (defsc LiProject [this {:reald.project/keys [name dir]}]
   {:query [:reald.project/name
            :reald.project/dir]
@@ -19,11 +36,13 @@
     (dom/button {:onClick #(dr/change-route this ["project" dir])}
                 dir)))
 
+
 (def ui-li-project (comp/factory LiProject {:keyfn :reald.project/dir}))
 
-(defsc Index [this {:reald.root/keys [projects]}]
+(defsc Index [this {:reald.root/keys [projects processes]}]
   {:ident         (fn [] [:component/id ::index])
-   :query         [{:reald.root/projects (comp/get-query LiProject)}]
+   :query         [{:reald.root/projects (comp/get-query LiProject)}
+                   {:reald.root/processes (comp/get-query LiProcess)}]
    :route-segment ["index"]
    :will-enter    (fn [app route-params]
                     (dr/route-deferred [:component/id ::index]
@@ -31,7 +50,12 @@
                                                  {:post-mutation        `dr/target-ready
                                                   :post-mutation-params {:target [:component/id ::index]}})))}
   (dom/ul
-    (map ui-li-project projects)))
+    (dom/li
+      "Processes"
+      (dom/ul (map ui-li-process processes)))
+    (dom/li
+      "Projects"
+      (dom/ul (map ui-li-project projects)))))
 
 (defsc LiRunConfig [this {:reald.run-config/keys [ident aliases]}]
   {:query [:reald.run-config/ident
@@ -40,12 +64,18 @@
 
 (def li-run-config (comp/factory LiRunConfig {:keyfn :reald.run-config/ident}))
 
-(defsc LiProcess [this {:reald.process/keys [pid]}]
-  {:query [:reald.process/pid]}
-  (dom/li
-    (pr-str [pid])))
 
-(def ui-li-process (comp/factory LiProcess {:keyfn :reald.process/pid}))
+(defsc Proc [this {:reald.process/keys [pid]}]
+  {:query         [:reald.process/pid]
+   :ident         :reald.process/pid
+   :route-segment ["process" :reald.process/pid]
+   :will-enter    (fn [app {:reald.process/keys [pid]}]
+                    (dr/route-deferred [:reald.process/pid pid]
+                                       #(df/load app [:reald.process/pid pid] Proc
+                                                 {:post-mutation        `dr/target-ready
+                                                  :post-mutation-params {:target [:reald.process/pid pid]}})))}
+  (dom/div
+    (pr-str [pid])))
 
 (defsc Project [this {:ui/keys            [selected-aliases]
                       :reald.project/keys [name dir run-configs aliases active-processes]}]
@@ -99,7 +129,7 @@
           (m/returning env Project)))
 
 (dr/defrouter TopRouter [this {:keys [current-state]}]
-  {:router-targets [Index Project]}
+  {:router-targets [Index Project Proc]}
   (case current-state
     :pending (dom/div "Loading...")
     :failed (dom/div "Loading seems to have failed. Try another route.")

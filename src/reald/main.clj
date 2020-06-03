@@ -29,7 +29,19 @@
           first))))
 
 (def register
-  [(pc/mutation `reald.project/create-repl
+  [(pc/resolver `processes
+                {::pc/output [:reald.root/processes]}
+                (fn [{:keys [conn]} _]
+                  {:reald.root/processes (d/q '[:find [(pull ?e [*]) ...]
+                                                :where
+                                                [?e ::process/pid]]
+                                              (d/db conn))}))
+   (pc/resolver `alive?
+                {::pc/input  #{::process/instance}
+                 ::pc/output [::process/alive?]}
+                (fn [{:keys [conn]} {::process/keys [instance]}]
+                  (::process/alive? (process/alive? instance))))
+   (pc/mutation `reald.project/create-repl
                 {}
                 (fn [{:keys [parser conn]
                       :as   env} {:reald.project/keys [dir aliases]}]
@@ -51,12 +63,11 @@
                                                                                             :where
 
                                                                                             [?process ::process/pid ?pid]
-                                                                                            [?e :reald.input-text/pending-input ?input]
+                                                                                            [?e :reald.input-text/pending-input true]
                                                                                             [?e :reald.input-text/process ?process]]
                                                                                           (ds/db conn) @ref-pid)
                                                                                     (sort-by :reald.input-text/inst)
                                                                                     first)]
-                                     (prn :found text)
                                      (when id
                                        (d/transact! conn [[:db.fn/retractEntity id]])
                                        text)))
@@ -67,7 +78,7 @@
                         pid (process/pid process)]
                     (ds/transact! conn [{::process/pid      pid
                                          ::process/instance process
-                                         ::process/dir      dir}])
+                                         :reald.project/dir dir}])
                     (deliver ref-pid pid)
                     {:reald.project/dir dir})))
    (pc/resolver `projects
