@@ -8,18 +8,21 @@
                           [goog.dom :as gdom]]
                 :default [[com.fulcrologic.fulcro.dom-server :as dom]])
             [com.fulcrologic.fulcro.mutations :as m]
-            [clojure.string :as string]))
+            [clojure.string :as string]
+            [clojure.edn :as edn]))
 
 
 (defsc LiProcess [this {:reald.process/keys [pid alive?]
                         :reald.project/keys [dir]}]
   {:query [:reald.process/pid
            :reald.process/alive?
-           :reald.project/dir]}
+           :reald.project/dir]
+   :ident :reald.process/pid}
   (dom/li
     (dom/button
-      {:disabled (not alive?)
-       :onClick  #(dr/change-route this ["process" pid])}
+      {:style   {:background-color (if alive?
+                                     "green" "red")}
+       :onClick #(dr/change-route this ["process" pid])}
       (str dir "@" pid))))
 
 
@@ -65,16 +68,22 @@
 (def li-run-config (comp/factory LiRunConfig {:keyfn :reald.run-config/ident}))
 
 
-(defsc Proc [this {:reald.process/keys [pid]}]
-  {:query         [:reald.process/pid]
+(defsc Proc [this {:reald.process/keys [pid alive?]}]
+  {:query         [:reald.process/pid
+                   :reald.process/alive?]
    :ident         :reald.process/pid
    :route-segment ["process" :reald.process/pid]
    :will-enter    (fn [app {:reald.process/keys [pid]}]
-                    (dr/route-deferred [:reald.process/pid pid]
-                                       #(df/load app [:reald.process/pid pid] Proc
-                                                 {:post-mutation        `dr/target-ready
-                                                  :post-mutation-params {:target [:reald.process/pid pid]}})))}
+                    (let [pid (edn/read-string pid)]
+                      (dr/route-deferred [:reald.process/pid pid]
+                                         #(df/load app [:reald.process/pid pid] Proc
+                                                   {:post-mutation        `dr/target-ready
+                                                    :post-mutation-params {:target [:reald.process/pid pid]}}))))}
   (dom/div
+    (dom/button
+      {:disabled (not alive?)
+       :onClick  #(comp/transact! this `[(reald.process/stop ~{:reald.process/pid pid})])}
+      "stop")
     (pr-str [pid])))
 
 (defsc Project [this {:ui/keys            [selected-aliases]
@@ -127,6 +136,14 @@
                          (-> st))))
   (remote [env]
           (m/returning env Project)))
+
+(m/defmutation reald.process/stop
+  [{:reald.process/keys [pid]}]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (m/returning env Proc)))
 
 (dr/defrouter TopRouter [this {:keys [current-state]}]
   {:router-targets [Index Project Proc]}

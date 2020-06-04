@@ -13,8 +13,9 @@
             [datascript.core :as ds]
             [clojure.string :as string]
             [datascript.core :as d])
-  (:import (java.io PushbackReader)
+  (:import (java.io PushbackReader File)
            (java.util Date)))
+(set! *warn-on-reflection* true)
 
 (defn generate-classpath!
   [{:reald.project/keys [dir aliases]}]
@@ -36,11 +37,29 @@
                                                 :where
                                                 [?e ::process/pid]]
                                               (d/db conn))}))
+   (pc/resolver `pull
+                {::pc/output [::process/instance]
+                 ::pc/input #{::process/pid}}
+                (fn [{:keys [conn]} {::process/keys [pid]}]
+                  (ds/pull (d/db conn)
+                           '[*]
+                           [::process/pid (Long/parseLong (str "0" pid))])))
    (pc/resolver `alive?
                 {::pc/input  #{::process/instance}
                  ::pc/output [::process/alive?]}
-                (fn [{:keys [conn]} {::process/keys [instance]}]
-                  (::process/alive? (process/alive? instance))))
+                (fn [_ {::process/keys [instance]}]
+                  {::process/alive? (process/alive? instance)}))
+   (pc/mutation `stop
+                {::pc/sym    `process/stop
+                 ::pc/params #{::process/pid}
+                 ::pc/output [::process/alive?]}
+                (fn [{:keys [conn]} {::process/keys [pid]}]
+                  (-> (ds/pull (d/db conn)
+                               '[*]
+                               [::process/pid (Long/parseLong (str "0" pid))])
+                      ::process/instance
+                      process/destroy)
+                  {::process/pid pid}))
    (pc/mutation `reald.project/create-repl
                 {}
                 (fn [{:keys [parser conn]
@@ -85,7 +104,7 @@
                 {::pc/output [:reald.root/projects]}
                 (fn [{::keys [project-roots]} _]
                   (let [projects (for [root project-roots
-                                       file (.listFiles (io/file root))
+                                       ^File file (.listFiles (io/file root))
                                        :when (.isDirectory file)]
                                    {:reald.project/dir-file file})]
                     {:reald.root/projects projects})))
@@ -94,11 +113,16 @@
                  ::pc/output [:reald.project/active-processes]}
                 (fn [{:keys [conn]} {:reald.project/keys [dir]}]
                   (let []
-                    {:reald.project/active-processes []})))
+                    {:reald.project/active-processes (d/q '[:find [(pull ?e [*]) ...]
+                                                            :in $ ?dir
+                                                            :where
+                                                            [?e ::process/instance]
+                                                            [?e :reald.project/dir ?dir]]
+                                                          (d/db conn) dir)})))
    (pc/resolver `dir-file->dir
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/dir]}
-                (fn [_ {:reald.project/keys [dir-file]}]
+                (fn [_ {:reald.project/keys [^File dir-file]}]
                   {:reald.project/dir (.getCanonicalPath dir-file)}))
    (pc/resolver `dir->dir-file
                 {::pc/input  #{:reald.project/dir}
@@ -109,14 +133,16 @@
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/run-configs]}
                 (fn [_ {:reald.project/keys [dir-file]}]
-                  {:reald.project/run-configs (->> (io/file dir-file ".repl-configs")
-                                                   (io/reader)
-                                                   (PushbackReader.)
-                                                   (edn/read)
-                                                   (map (fn [{:keys [description profiles] :as x}]
-                                                          {:reald.run-config/ident   description
-                                                           :reald.project/dir-file   dir-file
-                                                           :reald.run-config/aliases profiles})))}))
+                  (let [f (io/file dir-file ".repl-configs")]
+                    (when (.isFile f)
+                      {:reald.project/run-configs (->>
+                                                       (io/reader f)
+                                                       (PushbackReader.)
+                                                       (edn/read)
+                                                       (map (fn [{:keys [description profiles] :as x}]
+                                                              {:reald.run-config/ident   description
+                                                               :reald.project/dir-file   dir-file
+                                                               :reald.run-config/aliases profiles})))}))))
    (pc/resolver `dir-file->aliases
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/aliases]}
@@ -130,7 +156,7 @@
    (pc/resolver `dir-file->name
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/name]}
-                (fn [_ {:reald.project/keys [dir-file]}]
+                (fn [_ {:reald.project/keys [^File dir-file]}]
                   {:reald.project/name (.getName dir-file)}))])
 
 
