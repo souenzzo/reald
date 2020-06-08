@@ -4,6 +4,7 @@
                   :asset-path       "/"
                   :modules          {:ui {:entries [reald.ui]}}
                   :compiler-options {:source-map true}
-                  :devtools         {:preloads   [devtools.preload
+                  :devtools         {:preloads   [reald.user
+                                                  devtools.preload
                                                   com.fulcrologic.fulcro.inspect.preload]
                                      :after-load reald.user/after-load}}}}

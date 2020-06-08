@@ -4,5 +4,4 @@
 
 (defn after-load
   []
-  (prn :ok)
   (fa/force-root-render! @ui/SPA))
