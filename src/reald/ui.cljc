@@ -42,9 +42,10 @@
 
 (def ui-li-project (comp/factory LiProject {:keyfn :reald.project/dir}))
 
-(defsc Index [this {:reald.root/keys [projects processes]}]
+(defsc Index [this {:reald.root/keys [projects processes project-script]}]
   {:ident         (fn [] [:component/id ::index])
    :query         [{:reald.root/projects (comp/get-query LiProject)}
+                   :reald.root/project-script
                    {:reald.root/processes (comp/get-query LiProcess)}]
    :route-segment ["index"]
    :will-enter    (fn [app route-params]
@@ -58,7 +59,24 @@
       (dom/ul (map ui-li-process processes)))
     (dom/li
       "Projects"
-      (dom/ul (map ui-li-project projects)))))
+      (dom/ul (map ui-li-project projects)))
+    (dom/li
+      {:style {:display        "flex"
+               :flex-direction "column"}}
+      "project-script"
+      (dom/textarea {:value    project-script
+                     :onChange #(m/set-string!! this :reald.root/project-script :event %)})
+      (dom/button {:onClick #(comp/transact! this `[(reald.root/project-script ~{:reald.root/project-script project-script})])}
+                  "setar"))))
+
+(m/defmutation reald.root/project-script
+  [{:reald.root/keys [project-script]}]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (m/returning env Index)))
+
 
 (defsc LiRunConfig [this {:reald.run-config/keys [ident aliases]}]
   {:query [:reald.run-config/ident

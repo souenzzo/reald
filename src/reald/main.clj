@@ -12,7 +12,8 @@
             [clojure.java.shell :as sh]
             [datascript.core :as ds]
             [clojure.string :as string]
-            [datascript.core :as d])
+            [datascript.core :as d]
+            [sci.core :as sci])
   (:import (java.io PushbackReader File)
            (java.util Date)))
 (set! *warn-on-reflection* true)
@@ -37,9 +38,24 @@
                                                 :where
                                                 [?e ::process/pid]]
                                               (d/db conn))}))
+   (pc/mutation `reald.root/project-script
+                {}
+                (fn [{:keys [conn]} {:reald.root/keys [project-script]}]
+                  (d/transact! conn [{::root                     ::root
+                                      :reald.root/project-script project-script}])
+                  {}))
+   (pc/resolver `project-script
+                {::pc/output [:reald.root/project-script]}
+                (fn [{:keys [conn]} _]
+                  {:reald.root/project-script (-> '[:find ?project-script
+                                                    :where
+                                                    [_ :reald.root/project-script ?project-script]]
+                                                  (d/q (d/db conn))
+                                                  ffirst
+                                                  (or "(io/file HOME \"src\")"))}))
    (pc/resolver `pull
                 {::pc/output [::process/instance]
-                 ::pc/input #{::process/pid}}
+                 ::pc/input  #{::process/pid}}
                 (fn [{:keys [conn]} {::process/keys [pid]}]
                   (ds/pull (d/db conn)
                            '[*]
@@ -102,9 +118,21 @@
                     {:reald.project/dir dir})))
    (pc/resolver `projects
                 {::pc/output [:reald.root/projects]}
-                (fn [{::keys [project-roots]} _]
-                  (let [projects (for [root project-roots
-                                       ^File file (.listFiles (io/file root))
+                (fn [{:keys [parser] :as env} _]
+                  (let [project-script (-> (parser env [:reald.root/project-script])
+                                           :reald.root/project-script)
+                        result (try (sci/eval-string project-script
+                                                     {:bindings   (into {}
+                                                                        (map (juxt (comp symbol key)
+                                                                                   val))
+                                                                        (System/getenv))
+                                                      :classes    {'java.io.File java.io.File}
+                                                      :namespaces {'io {'file io/file}}})
+                                    (catch Throwable _ nil))
+                        projects (for [^File file (cond
+                                                    (and (instance? File result)
+                                                         (.isDirectory result)) (.listFiles result)
+                                                    :else [])
                                        :when (.isDirectory file)]
                                    {:reald.project/dir-file file})]
                     {:reald.root/projects projects})))
@@ -136,13 +164,13 @@
                   (let [f (io/file dir-file ".repl-configs")]
                     (when (.isFile f)
                       {:reald.project/run-configs (->>
-                                                       (io/reader f)
-                                                       (PushbackReader.)
-                                                       (edn/read)
-                                                       (map (fn [{:keys [description profiles] :as x}]
-                                                              {:reald.run-config/ident   description
-                                                               :reald.project/dir-file   dir-file
-                                                               :reald.run-config/aliases profiles})))}))))
+                                                    (io/reader f)
+                                                    (PushbackReader.)
+                                                    (edn/read)
+                                                    (map (fn [{:keys [description profiles]}]
+                                                           {:reald.run-config/ident   description
+                                                            :reald.project/dir-file   dir-file
+                                                            :reald.run-config/aliases profiles})))}))))
    (pc/resolver `dir-file->aliases
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/aliases]}
@@ -161,6 +189,7 @@
 
 
 (def schema {::process/pid             {:db/unique :db.unique/identity}
+             ::root                    {:db/unique :db.unique/identity}
              :reald.input-text/process {:db/unique :db.unique/identity}})
 (defonce entity-conn (ds/create-conn schema))
 
@@ -168,8 +197,7 @@
 (def parser
   (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})]
              ::p/mutate  pc/mutate
-             ::p/env     {::project-roots          [(str (System/getProperty "user.home") "/src")]
-                          ::p/reader               [p/map-reader
+             ::p/env     {::p/reader               [p/map-reader
                                                     pc/reader3
                                                     pc/open-ident-reader
                                                     p/env-placeholder-reader]
