@@ -42,10 +42,14 @@
 
 (def ui-li-project (comp/factory LiProject {:keyfn :reald.project/dir}))
 
-(defsc Index [this {:reald.root/keys [projects processes project-script]}]
+(defsc Index [this {:reald.root/keys [projects processes
+                                      project-script-result-valid?
+                                      project-script project-script-result-str]}]
   {:ident         (fn [] [:component/id ::index])
    :query         [{:reald.root/projects (comp/get-query LiProject)}
                    :reald.root/project-script
+                   :reald.root/project-script-result-str
+                   :reald.root/project-script-result-valid?
                    {:reald.root/processes (comp/get-query LiProcess)}]
    :route-segment ["index"]
    :will-enter    (fn [app route-params]
@@ -66,6 +70,8 @@
       "project-script"
       (dom/textarea {:value    project-script
                      :onChange #(m/set-string!! this :reald.root/project-script :event %)})
+      (dom/code {} project-script-result-str)
+      (dom/code {} (pr-str [:valid? project-script-result-valid?]))
       (dom/button {:onClick #(comp/transact! this `[(reald.root/project-script ~{:reald.root/project-script project-script})])}
                   "setar"))))
 

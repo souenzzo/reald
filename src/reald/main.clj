@@ -52,7 +52,7 @@
                                                     [_ :reald.root/project-script ?project-script]]
                                                   (d/q (d/db conn))
                                                   ffirst
-                                                  (or "(io/file HOME \"src\")"))}))
+                                                  (or "(.listFiles (io/file HOME \"src\"))"))}))
    (pc/resolver `pull
                 {::pc/output [::process/instance]
                  ::pc/input  #{::process/pid}}
@@ -116,24 +116,40 @@
                                          :reald.project/dir dir}])
                     (deliver ref-pid pid)
                     {:reald.project/dir dir})))
-   (pc/resolver `projects
-                {::pc/output [:reald.root/projects]}
-                (fn [{:keys [parser] :as env} _]
-                  (let [project-script (-> (parser env [:reald.root/project-script])
-                                           :reald.root/project-script)
-                        result (try (sci/eval-string project-script
+   (pc/resolver `script-output
+                {::pc/input  #{:reald.root/project-script}
+                 ::pc/output [:reald.root/project-script-result]}
+                (fn [env {:reald.root/keys [project-script]}]
+                  (let [result (try (sci/eval-string project-script
                                                      {:bindings   (into {}
                                                                         (map (juxt (comp symbol key)
                                                                                    val))
                                                                         (System/getenv))
                                                       :classes    {'java.io.File java.io.File}
                                                       :namespaces {'io {'file io/file}}})
-                                    (catch Throwable _ nil))
-                        projects (for [^File file (cond
-                                                    (and (instance? File result)
-                                                         (.isDirectory result)) (.listFiles result)
-                                                    :else [])
-                                       :when (.isDirectory file)]
+                                    (catch Throwable ex
+                                      ex))]
+                    {:reald.root/project-script-result result})))
+   (pc/resolver `valid?
+                {::pc/input  #{:reald.root/project-script-result}
+                 ::pc/output [:reald.root/project-script-result-valid?]}
+                (fn [env {:reald.root/keys [project-script-result]}]
+                  {:reald.root/project-script-result-valid? (boolean (when (seqable? project-script-result)
+                                                                       (every? #(instance? java.io.File %)
+                                                                               project-script-result)))}))
+   (pc/resolver `script-output-str
+                {::pc/input  #{:reald.root/project-script-result}
+                 ::pc/output [:reald.root/project-script-result-str]}
+                (fn [env {:reald.root/keys [project-script-result]}]
+                  {:reald.root/project-script-result-str (pr-str project-script-result)}))
+   (pc/resolver `projects
+                {::pc/input  #{:reald.root/project-script-result
+                               :reald.root/project-script-result-valid?}
+                 ::pc/output [:reald.root/projects]}
+                (fn [_ {:reald.root/keys [project-script-result-valid?
+                                          project-script-result]}]
+                  (let [projects (for [file (when project-script-result-valid?
+                                              project-script-result)]
                                    {:reald.project/dir-file file})]
                     {:reald.root/projects projects})))
    (pc/resolver `active-processes
@@ -212,6 +228,7 @@
                                                     io/input-stream
                                                     (transit/reader :json)
                                                     transit/read)
+                                         _ (log/info :tx tx)
                                          result (parser env tx)]
                                      (log/info :tx tx :restul result)
                                      {:body   (fn [w]
