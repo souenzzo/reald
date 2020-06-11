@@ -92,8 +92,19 @@
 (def li-run-config (comp/factory LiRunConfig {:keyfn :reald.run-config/ident}))
 
 
-(defsc Proc [this {:reald.process/keys [pid alive?]}]
+(defsc ReplIo [this {:reald.repl-io/keys [line origin direction inst]}]
+  {:query [:reald.repl-io/line
+           :reald.repl-io/origin
+           :reald.repl-io/inst
+           :reald.repl-io/direction]
+   :ident :reald.repl-io/inst}
+  (dom/div (pr-str [line origin direction inst])))
+
+
+(def ui-repl-io (comp/factory ReplIo {:keyfn :reald.repl-io/line}))
+(defsc Proc [this {:reald.process/keys [pid alive? repl-io]}]
   {:query         [:reald.process/pid
+                   {:reald.process/repl-io (comp/get-query ReplIo)}
                    :reald.process/alive?]
    :ident         :reald.process/pid
    :route-segment ["process" :reald.process/pid]
@@ -108,7 +119,13 @@
       {:disabled (not alive?)
        :onClick  #(comp/transact! this `[(reald.process/stop ~{:reald.process/pid pid})])}
       "stop")
-    (pr-str [pid])))
+    (dom/button
+      {:onClick #(df/load! this [:reald.process/pid pid] this)}
+      "♋")
+    (pr-str [pid])
+    (dom/div
+      (map ui-repl-io repl-io))
+    (dom/textarea)))
 
 (defsc Project [this {:ui/keys            [selected-aliases]
                       :reald.project/keys [name dir run-configs aliases active-processes]}]

@@ -173,20 +173,30 @@
                  ::pc/output [:reald.project/dir-file]}
                 (fn [_ {:reald.project/keys [dir]}]
                   {:reald.project/dir-file (io/file dir)}))
+   (pc/resolver `foo
+                {::pc/output [:reald.process/repl-io]}
+                (fn [_ _]
+                  {:reald.process/repl-io (vec (for [i (range 10)]
+                                                 {:reald.repl-io/line      (str "line " i)
+                                                  :reald.repl-io/origin    (rand-nth ["stdin"
+                                                                                      "stdout"
+                                                                                      "stderr"])
+                                                  :reald.repl-io/inst      (new Date)
+                                                  :reald.repl-io/direction "abc"}))}))
    (pc/resolver `dir-file->run-configs
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/run-configs]}
                 (fn [_ {:reald.project/keys [dir-file]}]
                   (let [f (io/file dir-file ".repl-configs")]
-                    (when (.isFile f)
-                      {:reald.project/run-configs (->>
-                                                    (io/reader f)
-                                                    (PushbackReader.)
-                                                    (edn/read)
-                                                    (map (fn [{:keys [description profiles]}]
-                                                           {:reald.run-config/ident   description
-                                                            :reald.project/dir-file   dir-file
-                                                            :reald.run-config/aliases profiles})))}))))
+                    {:reald.project/run-configs (vec (when (.isFile f)
+                                                       (->>
+                                                         (io/reader f)
+                                                         (PushbackReader.)
+                                                         (edn/read)
+                                                         (map (fn [{:keys [description profiles]}]
+                                                                {:reald.run-config/ident   description
+                                                                 :reald.project/dir-file   dir-file
+                                                                 :reald.run-config/aliases profiles})))))})))
    (pc/resolver `dir-file->aliases
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/aliases]}
