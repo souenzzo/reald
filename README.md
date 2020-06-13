@@ -8,7 +8,7 @@
 
 - Enter the directory `cd reald`
 
-- Start a REPL for development `clj -A:dev:cljs`
+- Start a REPL for development `clj -A:test:cljs`
 
 - Start developing server:
  
