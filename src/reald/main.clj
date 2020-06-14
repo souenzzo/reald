@@ -15,7 +15,8 @@
             [datascript.core :as d]
             [sci.core :as sci])
   (:import (java.io PushbackReader File)
-           (java.util Date)))
+           (java.util Date)
+           (java.time Instant)))
 (set! *warn-on-reflection* true)
 
 (defn generate-classpath!
@@ -76,10 +77,17 @@
                       ::process/instance
                       process/destroy)
                   {::process/pid pid}))
+   (pc/mutation `reald.process/send-input
+                {}
+                (fn [{:keys [conn]} {:reald.process/keys [pid stdin]}]
+                  (ds/transact! conn [{:reald.input-text/pending-input true
+                                       :reald.input-text/text          stdin
+                                       :reald.input-text/inst          (new Date)
+                                       :reald.input-text/process       [::process/pid pid]}])
+                  {::process/pid pid}))
    (pc/mutation `reald.project/create-repl
                 {}
-                (fn [{:keys [parser conn]
-                      :as   env} {:reald.project/keys [dir aliases]}]
+                (fn [{:keys [conn]} {:reald.project/keys [dir aliases]}]
                   (let [cp (generate-classpath! {:reald.project/dir     dir
                                                  :reald.project/aliases aliases})
                         command ["java" "-cp" cp "clojure.main"]
@@ -104,8 +112,8 @@
                                                                                     (sort-by :reald.input-text/inst)
                                                                                     first)]
                                      (when id
-                                       (d/transact! conn [[:db.fn/retractEntity id]])
-                                       text)))
+                                       (d/transact! conn [[:db/add id :reald.input-text/pending-input false]])
+                                       (str text "\n"))))
                         process (process/execute {::process/command   command
                                                   ::process/directory (io/file dir)
                                                   ::process/on-stdout on-stdout
@@ -173,16 +181,38 @@
                  ::pc/output [:reald.project/dir-file]}
                 (fn [_ {:reald.project/keys [dir]}]
                   {:reald.project/dir-file (io/file dir)}))
-   (pc/resolver `foo
-                {::pc/output [:reald.process/repl-io]}
-                (fn [_ _]
-                  {:reald.process/repl-io (vec (for [i (range 10)]
-                                                 {:reald.repl-io/line      (str "line " i)
-                                                  :reald.repl-io/origin    (rand-nth ["stdin"
-                                                                                      "stdout"
-                                                                                      "stderr"])
-                                                  :reald.repl-io/inst      (new Date)
-                                                  :reald.repl-io/direction "abc"}))}))
+   (pc/resolver `repl-io
+                {::pc/input  #{:reald.process/pid}
+                 ::pc/output [:reald.process/repl-io]}
+                (fn [{:keys [conn]} {:reald.process/keys [pid]}]
+                  {:reald.process/repl-io (sort-by :reald.repl-io/inst
+                                                   (concat (for [[id text inst] (d/q '[:find ?id ?text ?inst
+                                                                                       :in $ ?pid
+                                                                                       :where
+                                                                                       [?process ::process/pid ?pid]
+                                                                                       [?id :reald.text-fragment/process ?process]
+                                                                                       [?id :reald.text-fragment/text ?text]
+                                                                                       [?id :reald.text-fragment/inst ?inst]]
+                                                                                     (d/db conn) pid)]
+                                                             {:reald.repl-io/id        id
+                                                              :reald.repl-io/line      text
+                                                              :reald.repl-io/origin    "stdout"
+                                                              :reald.repl-io/inst      inst
+                                                              :reald.repl-io/direction "output"})
+                                                           (for [[id text inst pending?] (d/q '[:find ?id ?text ?inst ?pending?
+                                                                                                :in $ ?pid
+                                                                                                :where
+                                                                                                [?process ::process/pid ?pid]
+                                                                                                [?id :reald.input-text/process ?process]
+                                                                                                [?id :reald.input-text/pending-input ?pending?]
+                                                                                                [?id :reald.input-text/text ?text]
+                                                                                                [?id :reald.input-text/inst ?inst]]
+                                                                                              (d/db conn) pid)]
+                                                             {:reald.repl-io/id        id
+                                                              :reald.repl-io/line      text
+                                                              :reald.repl-io/origin    "stdin"
+                                                              :reald.repl-io/inst      inst
+                                                              :reald.repl-io/direction (str "input" pending?)})))}))
    (pc/resolver `dir-file->run-configs
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/run-configs]}
@@ -214,9 +244,10 @@
                   {:reald.project/name (.getName dir-file)}))])
 
 
-(def schema {::process/pid             {:db/unique :db.unique/identity}
-             ::root                    {:db/unique :db.unique/identity}
-             :reald.input-text/process {:db/unique :db.unique/identity}})
+(def schema {::process/pid                {:db/unique :db.unique/identity}
+             ::root                       {:db/unique :db.unique/identity}
+             :reald.text-fragment/process {:db/valueType :db.type/ref}
+             :reald.input-text/process    {:db/valueType :db.type/ref}})
 (defonce entity-conn (ds/create-conn schema))
 
 

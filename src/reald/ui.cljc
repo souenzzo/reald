@@ -20,8 +20,8 @@
    :ident :reald.process/pid}
   (dom/li
     (dom/button
-      {:style   {:background-color (if alive?
-                                     "green" "red")}
+      {:style   {:backgroundColor (if alive?
+                                    "green" "red")}
        :onClick #(dr/change-route this ["process" pid])}
       (str dir "@" pid))))
 
@@ -44,7 +44,8 @@
 
 (defsc Index [this {:reald.root/keys [projects processes
                                       project-script-result-valid?
-                                      project-script project-script-result-str]}]
+                                      project-script project-script-result-str]
+                    :or              {project-script ""}}]
   {:ident         (fn [] [:component/id ::index])
    :query         [{:reald.root/projects (comp/get-query LiProject)}
                    :reald.root/project-script
@@ -65,8 +66,8 @@
       "Projects"
       (dom/ul (map ui-li-project projects)))
     (dom/li
-      {:style {:display        "flex"
-               :flex-direction "column"}}
+      {:style {:display       "flex"
+               :flexDirection "column"}}
       "project-script"
       (dom/textarea {:value    project-script
                      :onChange #(m/set-string!! this :reald.root/project-script :event %)})
@@ -96,15 +97,28 @@
   {:query [:reald.repl-io/line
            :reald.repl-io/origin
            :reald.repl-io/inst
+           :reald.repl-io/id
            :reald.repl-io/direction]
    :ident :reald.repl-io/inst}
-  (dom/div (pr-str [line origin direction inst])))
+  (dom/div
+    {:style {:display         "flex"
+             :backgroundColor (if (= origin "stdout")
+                                "lightblue"
+                                "lightgreen")
+             :justifyContent  "space-between"}}
+    (dom/pre
+      line)
+    (dom/pre
+      (pr-str inst))))
 
 
-(def ui-repl-io (comp/factory ReplIo {:keyfn :reald.repl-io/line}))
-(defsc Proc [this {:reald.process/keys [pid alive? repl-io]}]
+(def ui-repl-io (comp/factory ReplIo {:keyfn :reald.repl-io/id}))
+(defsc Proc [this {:ui/keys            [stdin]
+                   :or                 {stdin ""}
+                   :reald.process/keys [pid alive? repl-io]}]
   {:query         [:reald.process/pid
                    {:reald.process/repl-io (comp/get-query ReplIo)}
+                   :ui/stdin
                    :reald.process/alive?]
    :ident         :reald.process/pid
    :route-segment ["process" :reald.process/pid]
@@ -125,7 +139,19 @@
     (pr-str [pid])
     (dom/div
       (map ui-repl-io repl-io))
-    (dom/textarea)))
+    (dom/textarea {:value    stdin
+                   :onChange #(m/set-value!! this :ui/stdin (-> % .-target .-value))})
+    (dom/button {:onClick #(comp/transact! this `[(reald.process/send-input ~{:reald.process/pid   pid
+                                                                              :reald.process/stdin stdin})])}
+                ">")))
+
+(m/defmutation reald.process/send-input
+  [{:reald.process/keys [pid stdin]}]
+  (action [{:keys [state ref]}]
+          (swap! state update-in ref assoc :ui/stdin ""))
+  (remote [env]
+          (-> env
+              (m/returning Proc))))
 
 (defsc Project [this {:ui/keys            [selected-aliases]
                       :reald.project/keys [name dir run-configs aliases active-processes]}]
