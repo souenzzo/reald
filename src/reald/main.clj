@@ -10,10 +10,12 @@
             [com.wsscode.pathom.connect :as pc]
             [clojure.edn :as edn]
             [clojure.java.shell :as sh]
+            [com.wsscode.pathom.viz.ws-connector.core :as p.connector]
             [datascript.core :as ds]
             [clojure.string :as string]
             [datascript.core :as d]
-            [sci.core :as sci])
+            [sci.core :as sci]
+            [com.wsscode.pathom.trace :as pt])
   (:import (java.io PushbackReader File)
            (java.util Date)
            (java.time Instant)))
@@ -250,9 +252,9 @@
              :reald.input-text/process    {:db/valueType :db.type/ref}})
 (defonce entity-conn (ds/create-conn schema))
 
-
 (def parser
-  (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})]
+  (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})
+                          pt/trace-plugin]
              ::p/mutate  pc/mutate
              ::p/env     {::p/reader               [p/map-reader
                                                     pc/reader3
@@ -260,6 +262,8 @@
                                                     p/env-placeholder-reader]
                           :conn                    entity-conn
                           ::p/placeholder-prefixes #{">"}}}))
+
+(p.connector/connect-parser {::p.connector/parser-id ::my-parser} parser)
 
 (defn service
   [& _]
@@ -287,14 +291,28 @@
                                            [:body
                                             {:onload "reald.ui.main('target')"}
                                             [:div {:id "target"}]
-                                            [:script {:src "/ui.js"}]]]]
+                                            [:script {:src "/reald/ui.js"}]]]]
                                  {:headers {"Content-Type" (get mime/default-mime-types "html")}
                                   :body    (str (h/html
                                                   {:mode :html}
                                                   (h/raw "<!DOCTYPE html>")
                                                   body))
                                   :status  200}))
-                    :route-name ::index]}})
+                    :route-name ::index]
+                   ["/workspaces" :get (fn [req]
+                                         (let [body [:html
+                                                     [:head
+                                                      [:title "workspaces"]]
+                                                     [:body
+                                                      [:div {:id "app"}]
+                                                      [:script {:src "workspaces/main.js"}]]]]
+                                           {:headers {"Content-Type" (get mime/default-mime-types "html")}
+                                            :body    (str (h/html
+                                                            {:mode :html}
+                                                            (h/raw "<!DOCTYPE html>")
+                                                            body))
+                                            :status  200}))
+                    :route-name ::workspaces]}})
 
 (defonce http-state
          (atom nil))

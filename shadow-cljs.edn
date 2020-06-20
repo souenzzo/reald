@@ -1,10 +1,19 @@
 {:deps   {:aliases [:cljs :test]}
- :builds {:reald {:target           :browser
-                  :output-dir       "target/public"
-                  :asset-path       "/"
-                  :modules          {:ui {:entries [reald.ui]}}
-                  :compiler-options {:source-map true}
-                  :devtools         {:preloads   [reald.user
-                                                  devtools.preload
-                                                  com.fulcrologic.fulcro.inspect.preload]
-                                     :after-load reald.user/after-load}}}}
+ :builds {:reald      {:target           :browser
+                       :output-dir       "target/public/reald"
+                       :asset-path       "/reald"
+                       :modules          {:ui {:entries [reald.ui]}}
+                       :compiler-options {:source-map true}
+                       :devtools         {:preloads   [reald.user
+                                                       devtools.preload
+                                                       com.fulcrologic.fulcro.inspect.preload]
+                                          :after-load reald.user/after-load}}
+          :workspaces {:target     :browser
+                       :output-dir "target/public/workspaces"
+                       :modules    {:main {:entries [reald.workspaces.main]}}
+                       :devtools   {:preloads   [reald.user
+                                                 devtools.preload
+                                                 com.fulcrologic.fulcro.inspect.preload]
+                                    :after-load reald.workspaces.main/after-load}
+                       :asset-path "/workspaces"}}}
+
