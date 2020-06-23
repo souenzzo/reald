@@ -17,8 +17,7 @@
             [sci.core :as sci]
             [com.wsscode.pathom.trace :as pt])
   (:import (java.io PushbackReader File)
-           (java.util Date)
-           (java.time Instant)))
+           (java.util Date)))
 (set! *warn-on-reflection* true)
 
 (defn generate-classpath!
@@ -92,13 +91,15 @@
                 (fn [{:keys [conn]} {:reald.project/keys [dir aliases]}]
                   (let [cp (generate-classpath! {:reald.project/dir     dir
                                                  :reald.project/aliases aliases})
-                        command ["java" "-cp" cp "clojure.main"]
+                        command ["java" "-cp" cp "-Dclojure.server.reald={:port 0 :accept clojure.core.server/io-prepl}"
+                                 "clojure.main" "-e" "@#'clojure.core.server/servers" "-r"]
                         ref-pid (promise)
                         on-stdout (fn [text]
                                     (ds/transact! conn
-                                                  [{:reald.text-fragment/text    text
-                                                    :reald.text-fragment/inst    (new Date)
-                                                    :reald.text-fragment/process [::process/pid @ref-pid]}]))
+                                                  [{:reald.text-fragment/text       text
+                                                    :reald.text-fragment/inst       (new Date)
+                                                    :reald.text-fragment/processed? false
+                                                    :reald.text-fragment/process    [::process/pid @ref-pid]}]))
                         on-stdin (fn []
                                    (let [{:keys [reald.input-text/text db/id]} (->> (ds/q '[:find [(pull ?e [:db/id
                                                                                                              :reald.input-text/text

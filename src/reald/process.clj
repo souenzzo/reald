@@ -24,7 +24,7 @@
             on-stdin
             on-stderr]
     :or    {timeout     1000
-            buffer-size 64}}]
+            buffer-size 1e5}}]
   (let [pb (ProcessBuilder. ^"[Ljava.lang.String;" (into-array command))
         pb (if directory
              (.directory pb directory)
