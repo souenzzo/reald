@@ -4,7 +4,6 @@
             [ring.util.mime-type :as mime]
             [clojure.java.io :as io]
             [reald.process :as process]
-            [taoensso.timbre :as log]
             [cognitect.transit :as transit]
             [com.wsscode.pathom.core :as p]
             [com.wsscode.pathom.connect :as pc]
@@ -15,7 +14,9 @@
             [clojure.string :as string]
             [datascript.core :as d]
             [sci.core :as sci]
-            [com.wsscode.pathom.trace :as pt])
+            [com.wsscode.pathom.trace :as pt]
+            [io.pedestal.log :as log]
+            [clojure.core.async :as async])
   (:import (java.io PushbackReader File)
            (java.util Date)))
 (set! *warn-on-reflection* true)
@@ -188,34 +189,11 @@
                 {::pc/input  #{:reald.process/pid}
                  ::pc/output [:reald.process/repl-io]}
                 (fn [{:keys [conn]} {:reald.process/keys [pid]}]
-                  {:reald.process/repl-io (sort-by :reald.repl-io/inst
-                                                   (concat (for [[id text inst] (d/q '[:find ?id ?text ?inst
-                                                                                       :in $ ?pid
-                                                                                       :where
-                                                                                       [?process ::process/pid ?pid]
-                                                                                       [?id :reald.text-fragment/process ?process]
-                                                                                       [?id :reald.text-fragment/text ?text]
-                                                                                       [?id :reald.text-fragment/inst ?inst]]
-                                                                                     (d/db conn) pid)]
-                                                             {:reald.repl-io/id        id
-                                                              :reald.repl-io/line      text
-                                                              :reald.repl-io/origin    "stdout"
-                                                              :reald.repl-io/inst      inst
-                                                              :reald.repl-io/direction "output"})
-                                                           (for [[id text inst pending?] (d/q '[:find ?id ?text ?inst ?pending?
-                                                                                                :in $ ?pid
-                                                                                                :where
-                                                                                                [?process ::process/pid ?pid]
-                                                                                                [?id :reald.input-text/process ?process]
-                                                                                                [?id :reald.input-text/pending-input ?pending?]
-                                                                                                [?id :reald.input-text/text ?text]
-                                                                                                [?id :reald.input-text/inst ?inst]]
-                                                                                              (d/db conn) pid)]
-                                                             {:reald.repl-io/id        id
-                                                              :reald.repl-io/line      text
-                                                              :reald.repl-io/origin    "stdin"
-                                                              :reald.repl-io/inst      inst
-                                                              :reald.repl-io/direction (str "input" pending?)})))}))
+                  {:reald.process/repl-io (for [{:db/keys [id] :as entity} (sort-by :reald.repl-io/inst
+                                                                                    (:reald.repl-io/_process (d/entity
+                                                                                                               (d/db conn)
+                                                                                                               [::process/pid pid])))]
+                                            (into {:reald.repl-io/id id} entity))}))
    (pc/resolver `dir-file->run-configs
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/run-configs]}
@@ -234,12 +212,13 @@
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/aliases]}
                 (fn [_ {:reald.project/keys [dir-file]}]
-                  {:reald.project/aliases (-> (io/file dir-file "deps.edn")
-                                              (io/reader)
-                                              (PushbackReader.)
-                                              (edn/read)
-                                              (:aliases)
-                                              (keys))}))
+                  {:reald.project/aliases (-> dir-file
+                                              (io/file "deps.edn")
+                                              io/reader
+                                              PushbackReader.
+                                              edn/read
+                                              :aliases
+                                              keys)}))
    (pc/resolver `dir-file->name
                 {::pc/input  #{:reald.project/dir-file}
                  ::pc/output [:reald.project/name]}
@@ -250,8 +229,70 @@
 (def schema {::process/pid                {:db/unique :db.unique/identity}
              ::root                       {:db/unique :db.unique/identity}
              :reald.text-fragment/process {:db/valueType :db.type/ref}
+             :reald.repl-io/process       {:db/valueType :db.type/ref}
              :reald.input-text/process    {:db/valueType :db.type/ref}})
-(defonce entity-conn (ds/create-conn schema))
+(defn tx-update-text-fragments
+  [db]
+  (for [[id text inst pid] (d/q '[:find ?id ?text ?inst ?pid
+                                  :where
+                                  [?process ::process/pid ?pid]
+                                  [?id :reald.text-fragment/process ?process]
+                                  [?id :reald.text-fragment/text ?text]
+                                  [?id :reald.text-fragment/inst ?inst]]
+                                db)
+        tx [[:db/retractEntity id]
+            {:reald.repl-io/line      text
+             :reald.repl-io/origin    "stdout"
+             :reald.repl-io/process   [::process/pid pid]
+             :reald.repl-io/inst      inst
+             :reald.repl-io/direction "output"}]]
+    tx))
+(defn tx-update-text-inputs
+  [db]
+  (for [[id text inst pending? pid] (d/q '[:find ?id ?text ?inst ?pending? ?pid
+                                           :where
+                                           [?process ::process/pid ?pid]
+                                           [?id :reald.input-text/process ?process]
+                                           [?id :reald.input-text/pending-input ?pending?]
+                                           [?id :reald.input-text/text ?text]
+                                           (not [?id :reald.tx-updates/updated-by ::tx-update-text-inputs])
+                                           [?id :reald.input-text/inst ?inst]]
+                                         db)
+        tx [[:db/add id :reald.tx-updates/updated-by ::tx-update-text-inputs]
+            {:reald.repl-io/line      text
+             :reald.repl-io/origin    "stdin"
+             :reald.repl-io/process   [::process/pid pid]
+             :reald.repl-io/inst      inst
+             :reald.repl-io/direction (str "input" pending?)}]]
+    tx))
+
+(defn tx-update-db
+  [db]
+  (concat
+    (tx-update-text-fragments db)
+    (tx-update-text-inputs db)))
+
+(defn create-conn
+  []
+  (let [last-db (async/chan
+                  (async/sliding-buffer 1))
+        conn (d/create-conn schema)]
+    (add-watch conn
+               ::worker
+               (fn [key conn db-before db-after]
+                 (async/put! last-db db-after)))
+    (async/go-loop []
+      (when-let [db (async/<! last-db)]
+        (try
+          (let [tx-data (#'tx-update-db db)]
+            (when-not (empty? tx-data)
+              (log/info :tx-data tx-data)
+              (d/transact! conn tx-data)))
+          (catch Throwable ex
+            (log/error :exception ex)))
+        (recur)))
+    conn))
+(defonce entity-conn (create-conn))
 
 (def parser
   (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})
