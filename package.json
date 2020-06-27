@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "d3": "5.16.0",
     "highlight.js": "10.1.1",
     "react": "16.13.1",
     "react-dom": "16.13.1",

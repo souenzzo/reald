@@ -1,0 +1,17 @@
+<configuration scan="true" scanPeriod="10 seconds">
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- encoder defaults to ch.qos.logback.classic.encoder.PatternLayoutEncoder -->
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS,America/Sao_Paulo} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+        <!-- Only log level INFO and above -->
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>DEBUG</level>
+        </filter>
+    </appender>
+    <root level="ERROR">
+        <appender-ref ref="STDOUT"/>
+    </root>
+    <logger name="reald"
+            level="DEBUG"/>
+</configuration>
