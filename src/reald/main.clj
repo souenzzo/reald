@@ -6,6 +6,7 @@
             [reald.process :as process]
             [cognitect.transit :as transit]
             [com.wsscode.pathom.core :as p]
+            [edamame.core :as edamame]
             [com.wsscode.pathom.connect :as pc]
             [clojure.edn :as edn]
             [clojure.java.shell :as sh]
@@ -266,10 +267,51 @@
              :reald.repl-io/direction (str "input" pending?)}]]
     tx))
 
+(defn tx-readable-data
+  [db]
+  (for [[id line] (d/q '[:find ?id ?line
+                         :where
+                         [?id :reald.repl-io/line ?line]
+                         (not [?id :reald.tx-updates/updated-by ::tx-readable-data])]
+                       db)
+        :let [[value ex] (try
+                           [(edamame.core/parse-string line
+                                                       {:all true})]
+                           (catch Throwable ex
+                             [nil ex]))]
+        tx [{:db/id                       id
+             :reald.repl-io/data?         true
+             :reald.repl-io/value         {::value value}
+             :reald.tx-updates/updated-by ::tx-readable-data}]]
+    tx))
+
+(defn tx-goto-definition
+  [db]
+  ;; WRONG!
+  (for [[id sym] (d/q '[:find ?id ?sym
+                        :where
+                        [?id :reald.repl-io/value ?value]
+                        (not [?id :reald.tx-updates/updated-by ::tx-goto-definition])
+                        [(get ?value ::value) ?expr]
+                        [(list? ?expr)]
+                        [(first ?expr) ?sym]]
+                      db)
+        tx [{:db/id                         id
+             :reald.repl-io/goto-definition (pr-str (meta (resolve (if (qualified-ident? sym)
+                                                                     sym
+                                                                     (symbol "clojure.core" sym)))))
+             :reald.tx-updates/updated-by   ::tx-goto-definition}]]
+    tx))
+
+
+
+
 (defn tx-update-db
   [db]
   (concat
     (tx-update-text-fragments db)
+    (tx-readable-data db)
+    #_(tx-goto-definition db)
     (tx-update-text-inputs db)))
 
 (defn create-conn

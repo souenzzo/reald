@@ -93,11 +93,13 @@
 (def li-run-config (comp/factory LiRunConfig {:keyfn :reald.run-config/ident}))
 
 
-(defsc ReplIo [this {:reald.repl-io/keys [line origin direction inst]}]
+(defsc ReplIo [this {:reald.repl-io/keys [line origin direction inst goto-definition]}]
   {:query [:reald.repl-io/line
            :reald.repl-io/origin
            :reald.repl-io/inst
            :reald.repl-io/id
+           :reald.repl-io/goto-definition
+           :reald.repl-io/data?
            :reald.repl-io/direction]
    :ident :reald.repl-io/inst}
   (dom/div
@@ -109,7 +111,7 @@
     (dom/pre
       line)
     (dom/pre
-      (pr-str inst))))
+      (pr-str [goto-definition inst]))))
 
 
 (def ui-repl-io (comp/factory ReplIo {:keyfn :reald.repl-io/id}))
