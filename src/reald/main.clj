@@ -229,6 +229,7 @@
 
 (def schema {::process/pid                {:db/unique :db.unique/identity}
              ::root                       {:db/unique :db.unique/identity}
+             :reald.tx-updates/updated-by {:db/cardinality :db.cardinality/many}
              :reald.text-fragment/process {:db/valueType :db.type/ref}
              :reald.repl-io/process       {:db/valueType :db.type/ref}
              :reald.input-text/process    {:db/valueType :db.type/ref}})
@@ -279,28 +280,35 @@
                                                        {:all true})]
                            (catch Throwable ex
                              [nil ex]))]
-        tx [{:db/id                       id
-             :reald.repl-io/data?         true
-             :reald.repl-io/value         {::value value}
-             :reald.tx-updates/updated-by ::tx-readable-data}]]
+        tx [[:db/add id :reald.tx-updates/updated-by ::tx-readable-data]
+            {:db/id               id
+             :reald.repl-io/data? true
+             :reald.repl-io/value {::value value}}]]
     tx))
 
 (defn tx-goto-definition
   [db]
-  ;; WRONG!
   (for [[id sym] (d/q '[:find ?id ?sym
                         :where
                         [?id :reald.repl-io/value ?value]
                         (not [?id :reald.tx-updates/updated-by ::tx-goto-definition])
-                        [(get ?value ::value) ?expr]
-                        [(list? ?expr)]
-                        [(first ?expr) ?sym]]
+                        [(clojure.core/get ?value ::value) ?expr]
+                        [(clojure.core/list? ?expr)]
+                        [(clojure.core/first ?expr) ?sym]
+                        [(clojure.core/symbol? ?sym)]]
                       db)
-        tx [{:db/id                         id
-             :reald.repl-io/goto-definition (pr-str (meta (resolve (if (qualified-ident? sym)
-                                                                     sym
-                                                                     (symbol "clojure.core" sym)))))
-             :reald.tx-updates/updated-by   ::tx-goto-definition}]]
+        :let [;; TODO: each repl-io should have a `current-namespace`
+              qualified (if (qualified-ident? sym)
+                          sym
+                          (symbol "clojure.core" (str sym)))
+              ;; TODO: Use kondo here
+              {:keys [file ns line]} (meta (resolve qualified))]
+        ;; TODO: Should generate something like "command-type: call, op: clojure.core/+, file: ..."
+        tx [[:db/add id :reald.tx-updates/updated-by ::tx-goto-definition]
+            {:db/id                         id
+             :reald.repl-io/goto-definition ["idea"
+                                             "--line" line
+                                             (str (subs (.getPath (io/resource "clojure/core.clj")) 5))]}]]
     tx))
 
 
@@ -311,7 +319,7 @@
   (concat
     (tx-update-text-fragments db)
     (tx-readable-data db)
-    #_(tx-goto-definition db)
+    (tx-goto-definition db)
     (tx-update-text-inputs db)))
 
 (defn create-conn
