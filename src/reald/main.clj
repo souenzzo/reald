@@ -3,359 +3,55 @@
             [hiccup2.core :as h]
             [ring.util.mime-type :as mime]
             [clojure.java.io :as io]
-            [reald.process :as process]
             [cognitect.transit :as transit]
             [com.wsscode.pathom.core :as p]
-            [edamame.core :as edamame]
             [com.wsscode.pathom.connect :as pc]
-            [clojure.edn :as edn]
-            [clojure.java.shell :as sh]
             [com.wsscode.pathom.viz.ws-connector.core :as p.connector]
-            [datascript.core :as ds]
-            [clojure.string :as string]
-            [datascript.core :as d]
-            [sci.core :as sci]
             [com.wsscode.pathom.trace :as pt]
-            [io.pedestal.log :as log]
-            [clojure.core.async :as async])
-  (:import (java.io PushbackReader File)
-           (java.util Date)))
+            [io.pedestal.log :as log]))
 (set! *warn-on-reflection* true)
 
-(defn generate-classpath!
-  [{:reald.project/keys [dir aliases]}]
-  (let [cmd (filter string? ["clojure"
-                             (when-not (empty? aliases)
-                               (str "-A" (string/join aliases)))
-                             "-Spath"])]
-    (binding [sh/*sh-dir* dir]
-      (-> (apply sh/sh cmd)
-          :out
-          string/split-lines
-          first))))
+(def instances
+  (atom []))
 
 (def register
-  [(pc/resolver `processes
-                {::pc/output [:reald.root/processes]}
-                (fn [{:keys [conn]} _]
-                  {:reald.root/processes (d/q '[:find [(pull ?e [*]) ...]
-                                                :where
-                                                [?e ::process/pid]]
-                                              (d/db conn))}))
-   (pc/mutation `reald.root/project-script
-                {}
-                (fn [{:keys [conn]} {:reald.root/keys [project-script]}]
-                  (d/transact! conn [{::root                     ::root
-                                      :reald.root/project-script project-script}])
+  [(pc/mutation `reald.rt/remove-project
+                {::pc/params [:reald.project/path]}
+                (fn [_ _]
                   {}))
-   (pc/resolver `project-script
-                {::pc/output [:reald.root/project-script]}
-                (fn [{:keys [conn]} _]
-                  {:reald.root/project-script (-> '[:find ?project-script
-                                                    :where
-                                                    [_ :reald.root/project-script ?project-script]]
-                                                  (d/q (d/db conn))
-                                                  ffirst
-                                                  (or "(.listFiles (io/file HOME \"src\"))"))}))
-   (pc/resolver `pull
-                {::pc/output [::process/instance]
-                 ::pc/input  #{::process/pid}}
-                (fn [{:keys [conn]} {::process/keys [pid]}]
-                  (ds/pull (d/db conn)
-                           '[*]
-                           [::process/pid (Long/parseLong (str "0" pid))])))
-   (pc/resolver `alive?
-                {::pc/input  #{::process/instance}
-                 ::pc/output [::process/alive?]}
-                (fn [_ {::process/keys [instance]}]
-                  {::process/alive? (process/alive? instance)}))
-   (pc/mutation `stop
-                {::pc/sym    `process/stop
-                 ::pc/params #{::process/pid}
-                 ::pc/output [::process/alive?]}
-                (fn [{:keys [conn]} {::process/keys [pid]}]
-                  (-> (ds/pull (d/db conn)
-                               '[*]
-                               [::process/pid (Long/parseLong (str "0" pid))])
-                      ::process/instance
-                      process/destroy)
-                  {::process/pid pid}))
-   (pc/mutation `reald.process/send-input
-                {}
-                (fn [{:keys [conn]} {:reald.process/keys [pid stdin]}]
-                  (ds/transact! conn [{:reald.input-text/pending-input true
-                                       :reald.input-text/text          stdin
-                                       :reald.input-text/inst          (new Date)
-                                       :reald.input-text/process       [::process/pid pid]}])
-                  {::process/pid pid}))
-   (pc/mutation `reald.project/create-repl
-                {}
-                (fn [{:keys [conn]} {:reald.project/keys [dir aliases]}]
-                  (let [cp (generate-classpath! {:reald.project/dir     dir
-                                                 :reald.project/aliases aliases})
-                        command ["java" "-cp" cp "-Dclojure.server.reald={:port 0 :accept clojure.core.server/io-prepl}"
-                                 "clojure.main" "-e" "@#'clojure.core.server/servers" "-r"]
-                        ref-pid (promise)
-                        on-stdout (fn [text]
-                                    (ds/transact! conn
-                                                  [{:reald.text-fragment/text       text
-                                                    :reald.text-fragment/inst       (new Date)
-                                                    :reald.text-fragment/processed? false
-                                                    :reald.text-fragment/process    [::process/pid @ref-pid]}]))
-                        on-stdin (fn []
-                                   (let [{:keys [reald.input-text/text db/id]} (->> (ds/q '[:find [(pull ?e [:db/id
-                                                                                                             :reald.input-text/text
-                                                                                                             :reald.input-text/inst])
-                                                                                                   ...]
-                                                                                            :in $ ?pid
-                                                                                            :where
+   (pc/mutation `reald.rt/add-new-project
+                {::pc/params [:reald.project/path]}
+                (fn [_ _]
+                  {}))
+   (pc/mutation `reald.rt/launch-instance
+                {::pc/params [:reald.project/path]
+                 ::pc/output [:reald.project/path]}
+                (fn [_ {:reald.project/keys [path]}]
+                  {:reald.project/path path}))
 
-                                                                                            [?process ::process/pid ?pid]
-                                                                                            [?e :reald.input-text/pending-input true]
-                                                                                            [?e :reald.input-text/process ?process]]
-                                                                                          (ds/db conn) @ref-pid)
-                                                                                    (sort-by :reald.input-text/inst)
-                                                                                    first)]
-                                     (when id
-                                       (d/transact! conn [[:db/add id :reald.input-text/pending-input false]])
-                                       (str text "\n"))))
-                        process (process/execute {::process/command   command
-                                                  ::process/directory (io/file dir)
-                                                  ::process/on-stdout on-stdout
-                                                  ::process/on-stdin  on-stdin})
-                        pid (process/pid process)]
-                    (ds/transact! conn [{::process/pid      pid
-                                         ::process/instance process
-                                         :reald.project/dir dir}])
-                    (deliver ref-pid pid)
-                    {:reald.project/dir dir})))
-   (pc/resolver `script-output
-                {::pc/input  #{:reald.root/project-script}
-                 ::pc/output [:reald.root/project-script-result]}
-                (fn [env {:reald.root/keys [project-script]}]
-                  (let [result (try (sci/eval-string project-script
-                                                     {:bindings   (into {}
-                                                                        (map (juxt (comp symbol key)
-                                                                                   val))
-                                                                        (System/getenv))
-                                                      :classes    {'java.io.File java.io.File}
-                                                      :namespaces {'io {'file io/file}}})
-                                    (catch Throwable ex
-                                      ex))]
-                    {:reald.root/project-script-result result})))
-   (pc/resolver `valid?
-                {::pc/input  #{:reald.root/project-script-result}
-                 ::pc/output [:reald.root/project-script-result-valid?]}
-                (fn [env {:reald.root/keys [project-script-result]}]
-                  {:reald.root/project-script-result-valid? (boolean (when (seqable? project-script-result)
-                                                                       (every? #(instance? java.io.File %)
-                                                                               project-script-result)))}))
-   (pc/resolver `script-output-str
-                {::pc/input  #{:reald.root/project-script-result}
-                 ::pc/output [:reald.root/project-script-result-str]}
-                (fn [env {:reald.root/keys [project-script-result]}]
-                  {:reald.root/project-script-result-str (pr-str project-script-result)}))
-   (pc/resolver `projects
-                {::pc/input  #{:reald.root/project-script-result
-                               :reald.root/project-script-result-valid?}
-                 ::pc/output [:reald.root/projects]}
-                (fn [_ {:reald.root/keys [project-script-result-valid?
-                                          project-script-result]}]
-                  (let [projects (for [file (when project-script-result-valid?
-                                              project-script-result)]
-                                   {:reald.project/dir-file file})]
-                    {:reald.root/projects projects})))
-   (pc/resolver `active-processes
-                {::pc/input  #{:reald.project/dir}
-                 ::pc/output [:reald.project/active-processes]}
-                (fn [{:keys [conn]} {:reald.project/keys [dir]}]
-                  (let []
-                    {:reald.project/active-processes (d/q '[:find [(pull ?e [*]) ...]
-                                                            :in $ ?dir
-                                                            :where
-                                                            [?e ::process/instance]
-                                                            [?e :reald.project/dir ?dir]]
-                                                          (d/db conn) dir)})))
-   (pc/resolver `dir-file->dir
-                {::pc/input  #{:reald.project/dir-file}
-                 ::pc/output [:reald.project/dir]}
-                (fn [_ {:reald.project/keys [^File dir-file]}]
-                  {:reald.project/dir (.getCanonicalPath dir-file)}))
-   (pc/resolver `dir->dir-file
-                {::pc/input  #{:reald.project/dir}
-                 ::pc/output [:reald.project/dir-file]}
-                (fn [_ {:reald.project/keys [dir]}]
-                  {:reald.project/dir-file (io/file dir)}))
-   (pc/resolver `repl-io
-                {::pc/input  #{:reald.process/pid}
-                 ::pc/output [:reald.process/repl-io]}
-                (fn [{:keys [conn]} {:reald.process/keys [pid]}]
-                  {:reald.process/repl-io (for [{:db/keys [id] :as entity} (sort-by :reald.repl-io/inst
-                                                                                    (:reald.repl-io/_process (d/entity
-                                                                                                               (d/db conn)
-                                                                                                               [::process/pid pid])))]
-                                            (into {:reald.repl-io/id id} entity))}))
-   (pc/resolver `dir-file->run-configs
-                {::pc/input  #{:reald.project/dir-file}
-                 ::pc/output [:reald.project/run-configs]}
-                (fn [_ {:reald.project/keys [dir-file]}]
-                  (let [f (io/file dir-file ".repl-configs")]
-                    {:reald.project/run-configs (vec (when (.isFile f)
-                                                       (->>
-                                                         (io/reader f)
-                                                         (PushbackReader.)
-                                                         (edn/read)
-                                                         (map (fn [{:keys [description profiles]}]
-                                                                {:reald.run-config/ident   description
-                                                                 :reald.project/dir-file   dir-file
-                                                                 :reald.run-config/aliases profiles})))))})))
-   (pc/resolver `dir-file->aliases
-                {::pc/input  #{:reald.project/dir-file}
-                 ::pc/output [:reald.project/aliases]}
-                (fn [_ {:reald.project/keys [dir-file]}]
-                  {:reald.project/aliases (-> dir-file
-                                              (io/file "deps.edn")
-                                              io/reader
-                                              PushbackReader.
-                                              edn/read
-                                              :aliases
-                                              keys)}))
-   (pc/resolver `dir-file->name
-                {::pc/input  #{:reald.project/dir-file}
-                 ::pc/output [:reald.project/name]}
-                (fn [_ {:reald.project/keys [^File dir-file]}]
-                  {:reald.project/name (.getName dir-file)}))])
+   (pc/resolver `project-instances
+                {::pc/input  #{:reald.project/path}
+                 ::pc/output [:reald.project/active-instances]}
+                (fn [_ {:reald.process/keys [path]}]
+                  {:reald.project/active-instances (filter
+                                                     (comp #{path} :reald.project/path)
+                                                     @instances)}))
 
-
-(def schema {::process/pid                {:db/unique :db.unique/identity}
-             ::root                       {:db/unique :db.unique/identity}
-             :reald.tx-updates/updated-by {:db/cardinality :db.cardinality/many}
-             :reald.text-fragment/process {:db/valueType :db.type/ref}
-             :reald.repl-io/process       {:db/valueType :db.type/ref}
-             :reald.input-text/process    {:db/valueType :db.type/ref}})
-(defn tx-update-text-fragments
-  [db]
-  (for [[id text inst pid] (d/q '[:find ?id ?text ?inst ?pid
-                                  :where
-                                  [?process ::process/pid ?pid]
-                                  [?id :reald.text-fragment/process ?process]
-                                  [?id :reald.text-fragment/text ?text]
-                                  [?id :reald.text-fragment/inst ?inst]]
-                                db)
-        tx [[:db/retractEntity id]
-            {:reald.repl-io/line      text
-             :reald.repl-io/origin    "stdout"
-             :reald.repl-io/process   [::process/pid pid]
-             :reald.repl-io/inst      inst
-             :reald.repl-io/direction "output"}]]
-    tx))
-(defn tx-update-text-inputs
-  [db]
-  (for [[id text inst pending? pid] (d/q '[:find ?id ?text ?inst ?pending? ?pid
-                                           :where
-                                           [?process ::process/pid ?pid]
-                                           [?id :reald.input-text/process ?process]
-                                           [?id :reald.input-text/pending-input ?pending?]
-                                           [?id :reald.input-text/text ?text]
-                                           (not [?id :reald.tx-updates/updated-by ::tx-update-text-inputs])
-                                           [?id :reald.input-text/inst ?inst]]
-                                         db)
-        tx [[:db/add id :reald.tx-updates/updated-by ::tx-update-text-inputs]
-            {:reald.repl-io/line      text
-             :reald.repl-io/origin    "stdin"
-             :reald.repl-io/process   [::process/pid pid]
-             :reald.repl-io/inst      inst
-             :reald.repl-io/direction (str "input" pending?)}]]
-    tx))
-
-(defn tx-readable-data
-  [db]
-  (for [[id line] (d/q '[:find ?id ?line
-                         :where
-                         [?id :reald.repl-io/line ?line]
-                         (not [?id :reald.tx-updates/updated-by ::tx-readable-data])]
-                       db)
-        :let [[value ex] (try
-                           [(edamame.core/parse-string line
-                                                       {:all true})]
-                           (catch Throwable ex
-                             [nil ex]))]
-        tx [[:db/add id :reald.tx-updates/updated-by ::tx-readable-data]
-            {:db/id               id
-             :reald.repl-io/data? true
-             :reald.repl-io/value {::value value}}]]
-    tx))
-
-(defn tx-goto-definition
-  [db]
-  (for [[id sym] (d/q '[:find ?id ?sym
-                        :where
-                        [?id :reald.repl-io/value ?value]
-                        (not [?id :reald.tx-updates/updated-by ::tx-goto-definition])
-                        [(clojure.core/get ?value ::value) ?expr]
-                        [(clojure.core/list? ?expr)]
-                        [(clojure.core/first ?expr) ?sym]
-                        [(clojure.core/symbol? ?sym)]]
-                      db)
-        :let [;; TODO: each repl-io should have a `current-namespace`
-              qualified (if (qualified-ident? sym)
-                          sym
-                          (symbol "clojure.core" (str sym)))
-              ;; TODO: Use kondo here
-              {:keys [file ns line]} (meta (resolve qualified))]
-        ;; TODO: Should generate something like "command-type: call, op: clojure.core/+, file: ..."
-        tx [[:db/add id :reald.tx-updates/updated-by ::tx-goto-definition]
-            {:db/id                         id
-             :reald.repl-io/goto-definition ["idea"
-                                             "--line" line
-                                             (str (subs (.getPath (io/resource "clojure/core.clj")) 5))]}]]
-    tx))
-
-
-
-
-(defn tx-update-db
-  [db]
-  (concat
-    (tx-update-text-fragments db)
-    (tx-readable-data db)
-    (tx-goto-definition db)
-    (tx-update-text-inputs db)))
-
-(defn create-conn
-  []
-  (let [last-db (async/chan
-                  (async/sliding-buffer 1))
-        conn (d/create-conn schema)]
-    (add-watch conn
-               ::worker
-               (fn [key conn db-before db-after]
-                 (async/put! last-db db-after)))
-    (async/go-loop []
-      (when-let [db (async/<! last-db)]
-        (try
-          (let [tx-data (#'tx-update-db db)]
-            (when-not (empty? tx-data)
-              (log/info :tx-data tx-data)
-              (d/transact! conn tx-data)))
-          (catch Throwable ex
-            (log/error :exception ex)))
-        (recur)))
-    conn))
-(defonce entity-conn (create-conn))
+   (pc/resolver `active-projects
+                {::pc/output [:reald.rt/active-projects]}
+                (fn [_ _]
+                  {:reald.rt/active-projects [{:reald.project/path "/home/souenzzo/src/reald"}]}))])
 
 (def parser
   (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})
-                          pt/trace-plugin]
+                          pt/trace-plugin
+                          p/error-handler-plugin]
              ::p/mutate  pc/mutate
              ::p/env     {::p/reader               [p/map-reader
                                                     pc/reader3
                                                     pc/open-ident-reader
                                                     p/env-placeholder-reader]
-                          :conn                    entity-conn
                           ::p/placeholder-prefixes #{">"}}}))
-
-(p.connector/connect-parser {::p.connector/parser-id ::my-parser} parser)
 
 (defn service
   [& _]
@@ -396,7 +92,7 @@
                                                      [:head
                                                       [:title "workspaces"]]
                                                      [:body
-                                                      [:div {:id "app"}]
+                                                      [:section {:id "app"}]
                                                       [:script {:src "workspaces/main.js"}]]]]
                                            {:headers {"Content-Type" (get mime/default-mime-types "html")}
                                             :body    (str (h/html

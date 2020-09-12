@@ -3,7 +3,8 @@
                        :output-dir       "target/public/reald"
                        :asset-path       "/reald"
                        :modules          {:ui {:entries [reald.ui]}}
-                       :compiler-options {:source-map true}
+                       :compiler-options {:source-map      true
+                                          :external-config {:fulcro {:wrap-inputs? false}}}
                        :devtools         {:preloads   [reald.user
                                                        devtools.preload
                                                        com.fulcrologic.fulcro.inspect.preload]

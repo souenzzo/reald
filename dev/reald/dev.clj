@@ -7,5 +7,5 @@
   []
   (shadow.server/start!)
   (shadow.api/watch :reald)
-  (shadow.api/watch :workspaces)
+  ;; (shadow.api/watch :workspaces)
   (reald/-main))
