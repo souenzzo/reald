@@ -8,10 +8,13 @@ Tela HOME:
 - Lista de runtimes ativos
 - Lista de terminais ativos
 
-[:reald.rt/available-runtimes
- :reald.rt/available-projects
- :reald.rt/active-instances
- :reald.rt/active-repls]
+[{:reald.rt/available-runtimes    [:reald.runtime/path]} ;;ident
+ ;; {:reald.rt/available-projects [:reald.project/path]} ;;ident
+ {:reald.rt/active-instances      [:reald.instance/pid   ;; ident
+                                   :reald.project/path]}
+ {:reald.rt/active-repls          [:reald.repl/id        ;; ident
+                                   :reald.project/path
+                                   :reald.instance/pid]}]
 
 Tela projeto:
 - Selectbox Alias disponiveis
@@ -22,12 +25,15 @@ Tela projeto:
 - Lista de runtimes ativos
 - Lista de terminais ativos
 
-{[:reald.project/id _] [:reald.project/available-aliases
-                        :reald.project/available-runtimes
-                        :reald.project/available-repl-inject
-                        :reald.project/active-instances
-                        :reald.project/active-repls]}
-
+{[:reald.project/path _] [{:reald.project/available-aliases     [:reald.project.alias/ident]}
+                          ;; {:reald.project/available-runtimes [:reald.project/path]}
+                          {:reald.project/available-repl-inject [:reald.repl-inject/ident
+                                                                 :reald.repl-inject/label]}
+                          {:reald.project/active-instances      [:reald.instance/pid           ;; ident
+                                                                 :reald.project/path]}
+                          {:reald.project/active-repls          [:reald.repl/id                ;; ident
+                                                                 :reald.project/path
+                                                                 :reald.instance/pid]}]}
 
 Tela instancia:
 - STDOUT do processo
@@ -36,13 +42,15 @@ Tela instancia:
 - Lista de terminais ativos
 - Botão "conectar novo REPL"
 
-
-
-{[:reald.instance/id _] [:reald.instance/stdout
-                         :reald.instance/active-terminals]}
+{[:reald.instance/pid _] [{:reald.instance/stdout           [:reald.value/tag
+                                                             :reald.value/val]}
+                          {:reald.instance/active-terminals [:reald.repl/id                 ;; ident
+                                                             :reald.project/path
+                                                             :reald.instance/pid]]}
 
 Tela TERMINAL:
 - Lista das interações (INPUT, RETURN, OUTPUT)
 - Input de texto para subimeter novo INPTU
 
-{[:reald.terminal/id _] [{:reald.terminal/values [:reald.value/tag ...]}]}
+{[:reald.terminal/id _] [{:reald.terminal/values [:reald.value/tag
+                                                  :reald.value/val]}]}
