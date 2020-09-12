@@ -1,6 +1,6 @@
 {:paths   ["src"]
  :deps    {com.cognitect/transit-clj      {:mvn/version "1.0.324"}
-           com.wsscode/pathom             {:mvn/version "2.3.0-alpha9"}
+           com.wsscode/pathom             {:mvn/version "2.3.0-alpha10"}
            datascript/datascript          {:mvn/version "0.18.13"}
            hiccup/hiccup                  {:mvn/version "2.0.0-alpha2"}
            io.pedestal/pedestal.jetty     {:mvn/version "0.5.8"}

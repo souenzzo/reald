@@ -8,11 +8,11 @@ Tela HOME:
 - Lista de runtimes ativos
 - Lista de terminais ativos
 
-[{:reald.rt/available-runtimes    [:reald.runtime/path]} ;;ident
- ;; {:reald.rt/available-projects [:reald.project/path]} ;;ident
- {:reald.rt/active-instances      [:reald.instance/pid   ;; ident
+[;; {:reald.rt/available-runtimes [:reald.runtime/path]}  ;;ident
+ {:reald.rt/available-projects    [:reald.project/path]}  ;;ident
+ {:reald.rt/active-instances      [:reald.instance/pid    ;; ident
                                    :reald.project/path]}
- {:reald.rt/active-repls          [:reald.repl/id        ;; ident
+ {:reald.rt/active-repls          [:reald.repl/id         ;; ident
                                    :reald.project/path
                                    :reald.instance/pid]}]
 
@@ -44,9 +44,9 @@ Tela instancia:
 
 {[:reald.instance/pid _] [{:reald.instance/stdout           [:reald.value/tag
                                                              :reald.value/val]}
-                          {:reald.instance/active-terminals [:reald.repl/id                 ;; ident
+                          {:reald.instance/active-terminals [:reald.repl/id         ;; ident
                                                              :reald.project/path
-                                                             :reald.instance/pid]]}
+                                                             :reald.instance/pid]}]}
 
 Tela TERMINAL:
 - Lista das interações (INPUT, RETURN, OUTPUT)
