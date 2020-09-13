@@ -10,7 +10,8 @@
             [com.fulcrologic.fulcro.mutations :as fm]
             [clojure.string :as string]
             [goog.events :as events]
-            [goog.history.EventType :as et])
+            [goog.history.EventType :as et]
+            [clojure.edn :as edn])
   (:import (goog.history Html5History Event)))
 
 ;; utilities
@@ -49,12 +50,16 @@
 ;;
 
 
-(defsc LiValue [this props]
+(defsc LiValue [this {:reald.value/keys [tag val]}]
   {:query [:reald.value/id
            :reald.value/tag
            :reald.value/val]
    :ident :reald.value/id}
-  (dom/div "LiValue"))
+  (dom/li
+    (dom/code {:style {:backgroundColor (if (= :out tag)
+                                          "green"
+                                          "red")}}
+              val)))
 
 (def ui-li-value (comp/factory LiValue {:keyfn :reald.value/id}))
 
@@ -78,20 +83,42 @@
 (def ui-li-terminal (comp/factory LiTerminal {:keyfn :reald.terminal/pid}))
 
 
-(defsc Instance [this props]
+(defsc Instance [this {:reald.instance/keys [pid values]}]
   {:query         [:reald.instance/pid
+                   :reald.instance/path
                    :reald.project/path
                    {:reald.instance/values (comp/get-query LiValue)}
                    {:reald.instance/active-terminals (comp/get-query LiTerminal)}]
    :ident         :reald.instance/pid
-   :route-segment ["instance" :reald.instance/pid]})
+   :will-enter    (fn [app {:reald.instance/keys [pid]}]
+                    (let [ref [:reald.instance/pid (edn/read-string pid)]]
+                      (dr/route-deferred ref
+                                         #(df/load! app ref Instance
+                                                    {:post-mutation        `dr/target-ready
+                                                     :post-mutation-params {:target ref}}))))
+   :route-segment ["instance" :reald.instance/pid]}
+  (dom/main
+    (dom/h1 "Instance")
+    (dom/code pid)
+    (dom/h2 "output")
+    (dom/ul
+      (map ui-li-value values))))
 
-(defsc LiInstance [this props]
+(defsc LiInstance [this {:reald.instance/keys [pid path alive?]}]
   {:query [:reald.instance/pid
-           :reald.project/path]
+           :reald.instance/alive?
+           :reald.instance/path]
    :ident :reald.instance/pid}
-  (dom/div "LiInstance"))
-
+  (dom/li
+    {:style {:backgroundColor (if alive?
+                                "green"
+                                "red")}}
+    (dom/a
+      {:href (str "#/instance/" pid)}
+      (str path "@" pid))
+    (form
+      {::on-submit    #(comp/transact! this `[(reald.instance/destroy ~{:reald.instance/pid pid})])
+       ::submit-label "\uD83D\uDCA3"})))
 
 (def ui-li-instance (comp/factory LiInstance {:keyfn :reald.instance/pid}))
 
@@ -120,6 +147,15 @@
 
 
 (fm/defmutation reald.rt/launch-instance
+  [_]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (fm/returning env Project)))
+
+
+(fm/defmutation reald.instance/destroy
   [_]
   (action [{:keys [state]}]
           (swap! state (fn [st]
@@ -187,13 +223,20 @@
   {:query         [{:>/router (comp/get-query Router)}]
    :initial-state (fn [_]
                     {:>/router (comp/get-initial-state Router _)})}
-  (comp/fragment
-    (dom/header
-      (dom/nav
-        (dom/a {:href "#/"}
-               "home")))
-    (ui-router router)
-    (dom/footer)))
+  (let [{::dr/keys [current-route]} router]
+    (comp/fragment
+      (dom/header
+        (dom/nav
+          (dom/li (dom/a {:href "#/"}
+                         "home"))
+          (when (contains? current-route :reald.project/path)
+            (dom/li (dom/a {:href (str "#/project/" (js/encodeURIComponent (:reald.project/path current-route)))}
+                           (:reald.project/path current-route))))
+          (when (contains? current-route :reald.instance/pid)
+            (dom/li (dom/a {:href (str "#/instance/" (:reald.instance/pid current-route))}
+                           (:reald.instance/pid current-route))))))
+      (ui-router router)
+      (dom/footer))))
 
 (defonce SPA (atom nil))
 

@@ -6,13 +6,26 @@
             [cognitect.transit :as transit]
             [com.wsscode.pathom.core :as p]
             [com.wsscode.pathom.connect :as pc]
-            [com.wsscode.pathom.viz.ws-connector.core :as p.connector]
             [com.wsscode.pathom.trace :as pt]
+            [reald.instance :as instance]
             [io.pedestal.log :as log]))
 (set! *warn-on-reflection* true)
+;; TODO: A daemon to:
+;; - Remove dead process
+;; - Check and update ::instance/alive?
+(defonce instances
+         (atom {}))
 
-(def instances
-  (atom []))
+(defonce terminals
+         (atom {}))
+
+(defn ->value
+  [{:keys [tag val id]
+    :as   this}]
+  (assoc this
+    :reald.value/id id
+    :reald.value/tag tag
+    :reald.value/val val))
 
 (def register
   [(pc/mutation `reald.rt/remove-project
@@ -27,20 +40,63 @@
                 {::pc/params [:reald.project/path]
                  ::pc/output [:reald.project/path]}
                 (fn [_ {:reald.project/keys [path]}]
+                  (swap! instances
+                         (fn [is]
+                           (let [{::instance/keys [pid]
+                                  :as             instance} (instance/start {:reald.project/path path
+                                                                             ::instance/path     path})]
+                             (assoc is pid instance))))
                   {:reald.project/path path}))
+   (pc/mutation `reald.instance/destroy
+                {::pc/params [::instance/pid]
+                 ::pc/output [::instance/pid]}
+                (fn [_ {::instance/keys [pid]}]
+                  (some-> instances
+                          deref
+                          (get pid)
+                          instance/stop)
+                  {::instance/pid pid}))
+   (pc/resolver `pid->path
+                {::pc/input  #{::instance/pid}
+                 ::pc/output [:reald.project/path
+                              ::instance/out]}
+                (fn [_ {::instance/keys [pid]}]
+                  (get @instances pid)))
+   (pc/resolver `out->values
+                {::pc/input  #{::instance/out}
+                 ::pc/output [::instance/values]}
+                (fn [_ {::instance/keys [out]}]
+                  {::instance/values (map ->value @out)}))
+   (pc/resolver `alive?
+                {::pc/input  #{::instance/pid}
+                 ::pc/output [::instance/alive?]}
+                (fn [_ {::instance/keys [pid]}]
+                  (some-> instances
+                          deref
+                          (get pid)
+                          instance/alive?
+                          (->> (hash-map ::instance/alive?)))))
 
    (pc/resolver `project-instances
                 {::pc/input  #{:reald.project/path}
                  ::pc/output [:reald.project/active-instances]}
-                (fn [_ {:reald.process/keys [path]}]
+                (fn [_ {:reald.project/keys [path]}]
                   {:reald.project/active-instances (filter
                                                      (comp #{path} :reald.project/path)
-                                                     @instances)}))
+                                                     (vals @instances))}))
+
+   (pc/resolver `active-terminals
+                {::pc/input  #{:reald.instance/pid}
+                 ::pc/output [:reald.instance/active-terminals]}
+                (fn [_ {:reald.instance/keys [pid]}]
+                  {:reald.instance/active-terminals (filter
+                                                      (comp #{pid} :reald.terminal/pid)
+                                                      (vals @terminals))}))
 
    (pc/resolver `active-projects
                 {::pc/output [:reald.rt/active-projects]}
                 (fn [_ _]
-                  {:reald.rt/active-projects [{:reald.project/path "/home/souenzzo/src/reald"}]}))])
+                  {:reald.rt/active-projects [{:reald.project/path (.getCanonicalPath (io/file "."))}]}))])
 
 (def parser
   (p/parser {::p/plugins [(pc/connect-plugin {::pc/register register})
