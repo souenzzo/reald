@@ -56,34 +56,61 @@
            :reald.value/val]
    :ident :reald.value/id}
   (dom/li
-    (dom/code {:style {:backgroundColor (if (= :out tag)
-                                          "green"
-                                          "red")}}
-              val)))
+    (dom/pre {:style {:backgroundColor (case tag
+                                         :out "lightgreen"
+                                         :err "lightred"
+                                         :in "lightblue"
+                                         "lightyellow")}}
+             val)))
 
 (def ui-li-value (comp/factory LiValue {:keyfn :reald.value/id}))
 
-(defsc Terminal [this props]
+(defsc Terminal [this {:reald.terminal/keys [id values]}]
   {:query         [:reald.terminal/id
                    :reald.instance/pid
                    :reald.project/path
                    {:reald.terminal/values (comp/get-query LiValue)}]
    :ident         :reald.terminal/id
+   :will-enter    (fn [app {:reald.terminal/keys [id]}]
+                    (let [ref [:reald.terminal/id (uuid id)]]
+                      (dr/route-deferred ref
+                                         #(df/load! app ref Terminal
+                                                    {:post-mutation        `dr/target-ready
+                                                     :post-mutation-params {:target ref}}))))
    :route-segment ["terminal" :reald.terminal/id]}
-  (dom/div "Terminal"))
+  (dom/main
+    (dom/h1 "Terminal")
+    (dom/code (str id))
+    (dom/ul
+      (map ui-li-value values))
+    (form {::params       `[(:reald.terminal/input {::multiline true})]
+           ::on-submit    #(comp/transact! this `[(reald.terminal/send-input ~(assoc %
+                                                                                :reald.terminal/id id))])
+           ::submit-label "reald.terminal/send-input"})))
 
-(defsc LiTerminal [this props]
+(fm/defmutation reald.terminal/send-input
+  [_]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (fm/returning env Terminal)))
+
+(defsc LiTerminal [this {:reald.terminal/keys [id pid]}]
   {:query [:reald.terminal/id
-           :reald.project/path
-           :reald.instance/pid]
+           :reald.terminal/path
+           :reald.terminal/pid]
    :ident :reald.terminal/id}
-  (dom/div "LiTerminal"))
+  (dom/li
+    (dom/a
+      {:href (str "#/terminal/" id)}
+      (str id))))
 
 
 (def ui-li-terminal (comp/factory LiTerminal {:keyfn :reald.terminal/pid}))
 
 
-(defsc Instance [this {:reald.instance/keys [pid values]}]
+(defsc Instance [this {:reald.instance/keys [pid values active-terminals]}]
   {:query         [:reald.instance/pid
                    :reald.instance/path
                    :reald.project/path
@@ -102,7 +129,35 @@
     (dom/code pid)
     (dom/h2 "output")
     (dom/ul
-      (map ui-li-value values))))
+      (map ui-li-value values))
+    (dom/ul
+      (map ui-li-terminal active-terminals))
+    (form {::params       `[(:reald.instance/form {::multiline true})]
+           ::on-submit    #(comp/transact! this `[(reald.instance/input ~(assoc %
+                                                                           :reald.instance/pid pid))])
+           ::submit-label "reald.instance/input"})
+    (form {::params       `[]
+           ::on-submit    (fn []
+                            (comp/transact! this `[(reald.instance/create-terminal ~{:reald.instance/pid pid})]))
+           ::submit-label "reald.instance/create-terminal"})))
+
+
+(fm/defmutation reald.instance/input
+  [_]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (fm/returning env Instance)))
+
+
+(fm/defmutation reald.instance/create-terminal
+  [_]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (fm/returning env Instance)))
 
 (defsc LiInstance [this {:reald.instance/keys [pid path alive?]}]
   {:query [:reald.instance/pid
@@ -231,10 +286,13 @@
                          "home"))
           (when (contains? current-route :reald.project/path)
             (dom/li (dom/a {:href (str "#/project/" (js/encodeURIComponent (:reald.project/path current-route)))}
-                           (:reald.project/path current-route))))
+                           (str (:reald.project/path current-route)))))
           (when (contains? current-route :reald.instance/pid)
             (dom/li (dom/a {:href (str "#/instance/" (:reald.instance/pid current-route))}
-                           (:reald.instance/pid current-route))))))
+                           (str (:reald.instance/pid current-route)))))
+          (when (contains? current-route :reald.terminal/id)
+            (dom/li (dom/a {:href (str "#/terminal/" (:reald.terminal/id current-route))}
+                           (str (:reald.terminal/id current-route)))))))
       (ui-router router)
       (dom/footer))))
 

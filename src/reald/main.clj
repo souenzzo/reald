@@ -1,18 +1,27 @@
 (ns reald.main
-  (:require [io.pedestal.http :as http]
-            [hiccup2.core :as h]
-            [ring.util.mime-type :as mime]
+  (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [cognitect.transit :as transit]
-            [com.wsscode.pathom.core :as p]
             [com.wsscode.pathom.connect :as pc]
+            [com.wsscode.pathom.core :as p]
             [com.wsscode.pathom.trace :as pt]
+            [hiccup2.core :as h]
+            [io.pedestal.http :as http]
+            [io.pedestal.log :as log]
             [reald.instance :as instance]
-            [io.pedestal.log :as log]))
+            [ring.util.mime-type :as mime]
+            [clojure.core.async :as async]
+            [clojure.string :as string])
+  (:import (java.util UUID)
+           (java.io PushbackReader IOException InputStream)
+           (java.net Socket)))
+
 (set! *warn-on-reflection* true)
+
 ;; TODO: A daemon to:
 ;; - Remove dead process
 ;; - Check and update ::instance/alive?
+;; - Create [:out :values] from [:out :val]
 (defonce instances
          (atom {}))
 
@@ -26,6 +35,16 @@
     :reald.value/id id
     :reald.value/tag tag
     :reald.value/val val))
+
+
+(defn watch!
+  [^InputStream in out]
+  (with-open [rdr (PushbackReader. (io/reader in))]
+    (loop []
+      (let [val (edn/read {:eof rdr} rdr)]
+        (when-not (= rdr val)
+          (swap! out conj (assoc val :id (UUID/randomUUID))))
+        (recur)))))
 
 (def register
   [(pc/mutation `reald.rt/remove-project
@@ -56,17 +75,109 @@
                           (get pid)
                           instance/stop)
                   {::instance/pid pid}))
+   (pc/mutation `reald.instance/input
+                {::pc/params [::instance/pid
+                              ::instance/form]
+                 ::pc/output [::instance/pid]}
+                (fn [_ {::instance/keys [pid form]}]
+                  (try
+                    (when-let [{::instance/keys [in]
+                                :as             instance} (some-> instances
+                                                                  deref
+                                                                  (get pid))]
+                      (async/put! in {:tag  :in
+                                      :val (str (string/trim-newline form)
+                                                "\n")})
+                      instance)
+                    (catch Throwable ex
+                      (def __ex ex)
+                      nil))))
+
+   (pc/mutation `reald.instance/create-terminal
+                {::pc/params [::instance/pid]
+                 ::pc/output [:reald.terminal/id]}
+                (fn [_ {::instance/keys [pid]}]
+                  (let [{::instance/keys [in io]} (some-> instances
+                                                          deref
+                                                          (get pid))
+                        id (UUID/randomUUID)
+                        out (async/chan)
+                        port+ (do
+                                (async/sub io :out out)
+                                (async/put! in {:tag  :in
+                                                :val (str `(let [server# (clojure.core.server/start-server
+                                                                           {:accept  `clojure.core.server/io-prepl
+                                                                            :address "127.0.0.1"
+                                                                            :port    0
+                                                                            :name    ~(str id)})]
+                                                             {:reald.terminal/id   ~id
+                                                              :reald.terminal/port (.getLocalPort server#)})
+                                                          "\n")})
+                                (loop []
+                                  (let [v (async/<!! out)
+                                        data (first
+                                               (filter
+                                                 (comp #{id} :reald.terminal/id)
+                                                 (:values v)))]
+                                    (cond
+                                      data (let [{:reald.terminal/keys [port]} data
+                                                 socket (Socket. "127.0.0.1" (int port))
+                                                 out (atom [])
+                                                 stdin (io/writer (.getOutputStream socket))
+                                                 stdout (.getInputStream socket)]
+                                             (async/thread
+                                               (when-let [{:keys [form] :as data} (async/<!! in)]
+                                                 (swap! io conj data)
+                                                 (.append stdin (str form))
+                                                 (.flush stdin)
+                                                 (recur)))
+                                             (async/thread
+                                               (try
+                                                 (watch! stdout out)
+                                                 (catch IOException _)
+                                                 (finally
+                                                   (try
+                                                     (.close stdout)
+                                                     (catch IOException _)))))
+                                             (assoc data
+                                               :reald.terminal/socket socket
+                                               :reald.terminal/stdin stdin
+                                               :reald.terminal/out out
+                                               :reald.terminal/stdout stdout))
+                                      :else (recur)))))]
+                    (get (swap! terminals update id merge port+)
+                         id))))
    (pc/resolver `pid->path
                 {::pc/input  #{::instance/pid}
                  ::pc/output [:reald.project/path
                               ::instance/out]}
                 (fn [_ {::instance/keys [pid]}]
                   (get @instances pid)))
+   (pc/mutation `reald.terminal/input
+                {::pc/params [:reald.terminal/id
+                              :reald.terminal/form]}
+                (fn [_ {:reald.terminal/keys [id form]}]
+                  (when-let [{:reald.terminal/keys [in]
+                              :as                  terminal} (some-> @terminals (get id))]
+                    (async/put! in {:tag  :in
+                                    :val (str (string/trim-newline form)
+                                              "\n")})
+                    terminal)))
+   (pc/resolver `terminal->instance
+                {::pc/input  #{:reald.terminal/id}
+                 ::pc/output [:reald.instance/pid]}
+                (fn [_ {:reald.terminal/keys [id]}]
+                  (some-> @terminals (get id))))
    (pc/resolver `out->values
-                {::pc/input  #{::instance/out}
+                {::pc/input  #{::instance/io}
                  ::pc/output [::instance/values]}
-                (fn [_ {::instance/keys [out]}]
-                  {::instance/values (map ->value @out)}))
+                (fn [_ {::instance/keys [io]}]
+                  {::instance/values (map ->value @io)}))
+   (pc/resolver `out->valuesx
+                {::pc/input  #{:reald.terminal/out}
+                 ::pc/output [:reald.terminal/values]}
+                (fn [_ {:reald.terminal/keys [io]}]
+                  {:reald.terminal/values (map ->value @io)}))
    (pc/resolver `alive?
                 {::pc/input  #{::instance/pid}
                  ::pc/output [::instance/alive?]}
