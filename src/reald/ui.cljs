@@ -60,6 +60,8 @@
                                          :out "lightgreen"
                                          :err "lightred"
                                          :in "lightblue"
+                                         :ret "LightGray"
+                                         :tap "LightSalmon"
                                          "lightyellow")}}
              val)))
 
@@ -83,12 +85,12 @@
     (dom/code (str id))
     (dom/ul
       (map ui-li-value values))
-    (form {::params       `[(:reald.terminal/input {::multiline true})]
-           ::on-submit    #(comp/transact! this `[(reald.terminal/send-input ~(assoc %
-                                                                                :reald.terminal/id id))])
-           ::submit-label "reald.terminal/send-input"})))
+    (form {::params       `[(:reald.terminal/form {::multiline true})]
+           ::on-submit    #(comp/transact! this `[(reald.terminal/input ~(assoc %
+                                                                           :reald.terminal/id id))])
+           ::submit-label "reald.terminal/input"})))
 
-(fm/defmutation reald.terminal/send-input
+(fm/defmutation reald.terminal/input
   [_]
   (action [{:keys [state]}]
           (swap! state (fn [st]
@@ -136,10 +138,11 @@
            ::on-submit    #(comp/transact! this `[(reald.instance/input ~(assoc %
                                                                            :reald.instance/pid pid))])
            ::submit-label "reald.instance/input"})
-    (form {::params       `[]
-           ::on-submit    (fn []
-                            (comp/transact! this `[(reald.instance/create-terminal ~{:reald.instance/pid pid})]))
-           ::submit-label "reald.instance/create-terminal"})))
+    (form {::params       `[:reald.instance/port]
+           ::on-submit    (fn [params]
+                            (comp/transact! this `[(reald.instance/connect-terminal ~(assoc params
+                                                                                       :reald.instance/pid pid))]))
+           ::submit-label "reald.instance/connect-terminal"})))
 
 
 (fm/defmutation reald.instance/input
@@ -151,7 +154,7 @@
           (fm/returning env Instance)))
 
 
-(fm/defmutation reald.instance/create-terminal
+(fm/defmutation reald.instance/connect-terminal
   [_]
   (action [{:keys [state]}]
           (swap! state (fn [st]

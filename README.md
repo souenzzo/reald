@@ -8,15 +8,13 @@
 
 - Enter the directory `cd reald`
 
+- Install npm deps `npm install`
+
 - Start a REPL for development `clj -A:test:cljs`
 
 - Start developing server:
  
 ```clojure
-(require 'reald.user)
-(in-ns 'reald.user)
-(-main)
-;; After reload the namespace `reald.main` you may 
-;; need to call `(-main)` again to see the changes
+((requiring-resolve `reald.dev/-main))
 ```
 

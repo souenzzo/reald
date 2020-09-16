@@ -61,10 +61,12 @@
         pubsub (async/pub in :tag)
         stdin (io/writer (.getOutputStream p))
         stdout (.getInputStream p)
-        stderr (.getErrorStream p)]
+        stderr (.getErrorStream p)
+        appends (async/chan)]
+    (async/sub pubsub :in appends)
     (async/thread
       (loop []
-        (when-let [{:keys [val] :as data} (async/<!! in)]
+        (when-let [{:keys [val] } (async/<!! appends)]
           (.append stdin (str val))
           (.flush stdin)
           (recur))))
