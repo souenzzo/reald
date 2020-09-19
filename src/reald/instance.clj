@@ -12,7 +12,7 @@
 (defn classpath
   [path]
   (binding [sh/*sh-dir* path]
-    (first (string/split-lines (:out (sh/sh "clojure" "-Spath"))))))
+    (first (string/split-lines (:out (sh/sh "clojure" "-A:test" "-Spath"))))))
 
 (defn watch!
   [^InputStream rdr in tag]

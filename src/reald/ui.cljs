@@ -112,10 +112,23 @@
 (def ui-li-terminal (comp/factory LiTerminal {:keyfn :reald.terminal/pid}))
 
 
-(defsc Instance [this {:reald.instance/keys [pid values active-terminals]}]
+(defsc LiTest [this {:keys [reald.test/sym
+                            reald.instance/pid]}]
+  {:query [:reald.test/sym
+           :reald.instance/pid]}
+  (dom/li
+    (dom/button
+      {:onClick #(comp/transact! this `[(reald.instance/run-test ~{:reald.instance/pid pid
+                                                                   :reald.test/sym     sym})])}
+      (str sym))))
+
+(def ui-li-test (comp/factory LiTest {:keyfn :project.test/symbol}))
+
+(defsc Instance [this {:reald.instance/keys [pid values active-terminals tests]}]
   {:query         [:reald.instance/pid
                    :reald.instance/path
                    :reald.project/path
+                   {:reald.instance/tests (comp/get-query LiTest)}
                    {:reald.instance/values (comp/get-query LiValue)}
                    {:reald.instance/active-terminals (comp/get-query LiTerminal)}]
    :ident         :reald.instance/pid
@@ -129,11 +142,15 @@
   (dom/main
     (dom/h1 "Instance")
     (dom/code pid)
-    (dom/h2 "output")
-    (dom/ul
-      (map ui-li-value values))
-    (dom/ul
-      (map ui-li-terminal active-terminals))
+    (if (empty? active-terminals)
+      "No active terminals"
+      (dom/ul
+        "Active terminals:"
+        (map ui-li-terminal active-terminals)))
+    (when-not (empty? tests)
+      (dom/ul
+        "Run a test"
+        (map ui-li-test tests)))
     (form {::params       `[(:reald.instance/form {::multiline true})]
            ::on-submit    #(comp/transact! this `[(reald.instance/input ~(assoc %
                                                                            :reald.instance/pid pid))])
@@ -142,7 +159,20 @@
            ::on-submit    (fn [params]
                             (comp/transact! this `[(reald.instance/connect-terminal ~(assoc params
                                                                                        :reald.instance/pid pid))]))
-           ::submit-label "reald.instance/connect-terminal"})))
+           ::submit-label "reald.instance/connect-terminal"})
+
+    (dom/ul
+      (map ui-li-value values))))
+
+
+
+(fm/defmutation reald.instance/run-test
+  [_]
+  (action [{:keys [state]}]
+          (swap! state (fn [st]
+                         (-> st))))
+  (remote [env]
+          (fm/returning env Instance)))
 
 
 (fm/defmutation reald.instance/input

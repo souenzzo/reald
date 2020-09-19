@@ -11,10 +11,32 @@
             [reald.instance :as instance]
             [ring.util.mime-type :as mime]
             [clojure.core.async :as async]
+            [clj-kondo.core :as kondo]
             [clojure.string :as string])
   (:import (java.util UUID)
            (java.io PushbackReader IOException InputStream)
            (java.net Socket)))
+
+
+(defn find-tests
+  [path]
+  (sequence
+    (comp
+      (filter (comp `#{clojure.test/deftest}
+                    :defined-by)))
+    (:var-definitions (:analysis (kondo/run! {:lint   [path]
+                                              :config {:output {:analysis true}}})))))
+
+
+(comment
+  run a test in REPL
+  (let [v (requiring-resolve `reald.instance-test/simple)]
+    (binding [clojure.test/*report-counters* (ref clojure.test/*initial-report-counters*)]
+      (let [ns-obj (the-ns (symbol (namespace (symbol v))))]
+        (clojure.test/do-report {:type :begin-test-ns, :ns ns-obj})
+        (clojure.test/test-vars [v])
+        (clojure.test/do-report {:type :end-test-ns, :ns ns-obj}))
+      @clojure.test/*report-counters*)))
 
 (set! *warn-on-reflection* true)
 
@@ -162,16 +184,51 @@
                  ::pc/output [:reald.instance/pid]}
                 (fn [_ {:reald.terminal/keys [id]}]
                   (some-> @terminals (get id))))
+   (pc/resolver `project-tests
+                {::pc/input  #{:reald.instance/path
+                               :reald.instance/pid}
+                 ::pc/output [:reald.instance/tests]}
+                (fn [_ {:reald.instance/keys [pid path]}]
+                  {:reald.instance/tests (for [{:keys [ns name]} (find-tests path)]
+                                           {:reald.instance/pid pid
+                                            :reald.test/sym     (symbol (str ns)
+                                                                        (str name))})}))
+   (pc/mutation `reald.instance/run-test
+                {::pc/params [:reald.instance/pid
+                              :reald.test/symbol]
+                 ::pc/output [:reald.instance/pid]}
+                (fn [_ {:keys [reald.instance/pid
+                               reald.test/sym]}]
+                  (when-let [{:reald.instance/keys [in]} (some-> @instances (get pid))]
+                    (async/put! in {:tag :in
+                                    :val (str
+                                           `(require
+                                              '~(symbol (namespace sym))
+                                              'clojure.test
+                                              :reload)
+                                           "\n")})
+                    (async/put! in {:tag :in
+                                    :val (str
+                                           `(let [v# (requiring-resolve '~sym)]
+                                              (binding [clojure.test/*report-counters* (ref clojure.test/*initial-report-counters*)]
+                                                (let [ns-obj# (the-ns '~(symbol (namespace sym)))]
+                                                  (clojure.test/do-report {:type :begin-test-ns, :ns ns-obj#})
+                                                  (clojure.test/test-vars [v#])
+                                                  (clojure.test/do-report {:type :end-test-ns, :ns ns-obj#}))
+                                                @clojure.test/*report-counters*))
+                                           "\n")})
+                    {:reald.instance/pid pid})))
+
    (pc/resolver `out->values
                 {::pc/input  #{::instance/io}
                  ::pc/output [::instance/values]}
                 (fn [_ {::instance/keys [io]}]
-                  {::instance/values (map ->value @io)}))
+                  {::instance/values (reverse (map ->value @io))}))
    (pc/resolver `out->valuesx
                 {::pc/input  #{:reald.terminal/io}
                  ::pc/output [:reald.terminal/values]}
                 (fn [_ {:reald.terminal/keys [io]}]
-                  {:reald.terminal/values (map ->value @io)}))
+                  {:reald.terminal/values (reverse (map ->value @io))}))
    (pc/resolver `alive?
                 {::pc/input  #{::instance/pid}
                  ::pc/output [::instance/alive?]}
